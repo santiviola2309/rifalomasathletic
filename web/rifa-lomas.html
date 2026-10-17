@@ -195,7 +195,8 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       <h2 class="ok" id="done-title">¡Listo!</h2>
       <p id="done-line"></p>
       <div class="nums" id="done-nums"></div>
-      <p class="muted">El comprador recibe sus números y sus cupones por WhatsApp.</p>
+      <a class="btn green" id="btn-wsp" href="#" target="_blank" rel="noopener" style="text-align:center" hidden>Enviarme mis números por WhatsApp</a>
+      <p class="muted" id="done-note">Guardá tus números: tocá el botón y mandátelos por WhatsApp.</p>
       <div class="fields">
         <button class="btn" id="btn-another">Cargar otra venta</button>
         <button class="btn line" data-go="home">Terminar</button>
@@ -261,6 +262,36 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   }
 
   function $(id) { return document.getElementById(id); }
+
+  // --- Botón "Enviarme mis números por WhatsApp" (abre WhatsApp con el mensaje escrito) ---
+  var lastWsp = '';
+  function guardarWsp(v) {
+    lastWsp = v;
+    try { sessionStorage.setItem('rifa_wsp', v); } catch (e) { /* sin almacenamiento: queda en memoria */ }
+  }
+  function leerWsp() {
+    if (lastWsp) return lastWsp;
+    try { return sessionStorage.getItem('rifa_wsp') || ''; } catch (e) { return ''; }
+  }
+  // Devuelve el número en formato internacional para Argentina (549 + área + número) o null.
+  function waNumero(raw) {
+    var d = String(raw || '').replace(/\D/g, '');
+    if (d.indexOf('00') === 0) d = d.slice(2);
+    if (d.indexOf('54') === 0 && d.length >= 12) { d = d.slice(2); if (d.charAt(0) === '9') d = d.slice(1); }
+    d = d.replace(/^0+/, '');
+    if (d.length === 12) {   // código de área + 15 + número (formato viejo)
+      for (var a = 2; a <= 4; a++) { if (d.substr(a, 2) === '15') { d = d.slice(0, a) + d.slice(a + 2); break; } }
+    }
+    return d.length === 10 ? '549' + d : null;
+  }
+  function mostrarWsp(nums, ref) {
+    var num = waNumero(leerWsp());
+    var texto = '¡Hola! Estos son mis números de la Rifa Solidaria del Lomas Athletic Club: ' + nums.join(', ') +
+      '. Sorteo por la Quiniela Nacional Nocturna del 11/12/2026.' + (ref ? ' Orden ' + ref + '.' : '');
+    var a = $('btn-wsp');
+    a.href = 'https://wa.me/' + (num || '') + '?text=' + encodeURIComponent(texto);
+    a.hidden = false;
+  }
   function money(n) { return '$' + n.toLocaleString('es-AR'); }
   function pad(n) { return String(n).padStart(4, '0'); }
 
@@ -395,6 +426,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     if (API !== null) {
       var codigo = mode === 'buy' ? cleanCode($('b-who').value) : (seller && seller.code) || '';
       var btn = $('btn-pay'); btn.disabled = true;
+      guardarWsp(wsp);
       api('POST', '/api/crear-pago', {
         nombre: name, whatsapp: wsp, cantidad: qty, modo: pick ? 'elegir' : 'azar',
         numeros: chosen ? chosen.map(Number) : undefined, codigoVendedor: codigo || undefined
@@ -408,6 +440,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       });
       return;
     }
+    guardarWsp(wsp);
     pending = { buyer: name, qty: qty, who: who, nums: chosen };
     $('pay-title').textContent = 'Pagar ' + money(qty * PRICE);
     var rl = $('reserve-line'); rl.hidden = !chosen;
@@ -428,6 +461,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     var box = $('done-nums'); box.textContent = '';
     nums.forEach(function (n) { var s = document.createElement('span'); s.className = 'num'; s.textContent = n; box.appendChild(s); });
     $('btn-another').hidden = mode === 'buy';
+    mostrarWsp(nums, null);
     go('done');
   });
   $('btn-another').addEventListener('click', function () {
@@ -487,14 +521,16 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   function mostrarOrden(ref, rechazado, intento) {
     intento = intento || 0;
     var t = $('done-title'), l = $('done-line'), box = $('done-nums');
-    $('btn-another').hidden = true; box.textContent = '';
+    $('btn-another').hidden = true; box.textContent = ''; $('btn-wsp').hidden = true;
     function estado(titulo, texto, ok) { t.textContent = titulo; t.className = ok ? 'ok' : ''; l.textContent = texto; }
+    if (!intento) estado('Confirmando tu pago…', 'Un momento, estamos verificando.');
     api('GET', '/api/orden/' + encodeURIComponent(ref)).then(function (r) {
       if (!r.ok) { estado('No encontramos la compra', 'Revisá el link o escribinos.'); return; }
       var o = r.body;
       if (o.estado === 'pagada') {
         estado('¡Listo!', 'Tu compra está confirmada. Estos son tus números:', true);
         o.numeros.forEach(function (n) { var s = document.createElement('span'); s.className = 'num'; s.textContent = n; box.appendChild(s); });
+        mostrarWsp(o.numeros, ref);
         return;
       }
       if (o.estado === 'requiere_reembolso') { estado('Recibimos tu pago, pero hubo un problema', 'No pudimos asignarte los números. Te vamos a devolver el dinero. Escribinos por WhatsApp.'); return; }
