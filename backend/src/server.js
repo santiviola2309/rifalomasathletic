@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { aplicarEsquema, makePool } from './db.js';
-import { elegirMp } from './config.js';
+import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
 import {
   ErrorNegocio, PRECIO, buscarVendedor, cancelarOrden, conciliacion, crearOrden, estadoOrden,
@@ -163,7 +163,8 @@ export function crearApp({ pool, mp, config = {} }) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const puerto = Number(process.env.PORT ?? 3000);
   process.env.PORT = String(puerto);
-  const { modo, baseUrl, mp } = elegirMp();
+  const { modo, baseUrl, mp, verificarCuenta, inicioToken } = elegirMp();
+  if (verificarCuenta) await exigirCuentaDePrueba(mp, inicioToken);
   const pool = makePool();
   await aplicarEsquema(pool);
   const app = crearApp({

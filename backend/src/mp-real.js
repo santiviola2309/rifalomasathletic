@@ -79,6 +79,12 @@ export function crearMpReal({
       return { id: d.id, init_point: link };
     },
 
+    // De quién es la credencial. Las cuentas de prueba de Mercado Pago tienen usuario TESTUSER…
+    async getAccount() {
+      const d = await llamar('GET', '/users/me');
+      return { id: String(d.id ?? ''), nickname: String(d.nickname ?? '') };
+    },
+
     async getPayment(id) {
       if (!/^\d+$/.test(String(id))) throw new ErrorMp('Id de pago inválido', 400);
       const d = await llamar('GET', `/v1/payments/${id}`);

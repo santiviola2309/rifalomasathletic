@@ -25,12 +25,10 @@ export function elegirMp(env = process.env) {
   if (!token) throw new Error(`MP_MODO=${modo} requiere MP_ACCESS_TOKEN`);
 
   if (modo === 'prueba') {
-    if (!esTokenDePrueba(token)) {
-      throw new Error('MP_MODO=prueba exige un Access Token de PRUEBA (empieza con TEST-). '
-        + `El valor cargado empieza con "${token.slice(0, 4)}…". `
-        + 'No se arranca para no cobrar de verdad con una credencial de producción.');
-    }
-    return { modo, baseUrl, mp: crearMpReal({ accessToken: token, baseUrl, usarSandbox: env.MP_SANDBOX === '1' }) };
+    const mp = crearMpReal({ accessToken: token, baseUrl, usarSandbox: env.MP_SANDBOX === '1' });
+    // Con prefijo TEST- alcanza. Si no lo tiene (Mercado Pago también entrega credenciales de
+    // prueba con otro formato), el servidor verifica con exigirCuentaDePrueba() antes de arrancar.
+    return { modo, baseUrl, mp, verificarCuenta: !esTokenDePrueba(token), inicioToken: token.slice(0, 4) };
   }
 
   // produccion
@@ -40,4 +38,23 @@ export function elegirMp(env = process.env) {
   for (const v of ['PANEL_KEY', 'MP_WEBHOOK_SECRET', 'RIFA_AUTORIZACION_NRO']) if (!env[v]) faltan.push(v);
   if (faltan.length) throw new Error(`MP_MODO=produccion requiere: ${faltan.join(', ')}`);
   return { modo, baseUrl, mp: crearMpReal({ accessToken: token, baseUrl }) };
+}
+
+/**
+ * Se niega a seguir si la credencial no es de una cuenta de PRUEBA de Mercado Pago
+ * (usuario TESTUSER…). Evita cobrar de verdad con la cuenta real por error.
+ */
+export async function exigirCuentaDePrueba(mp, inicioToken = '') {
+  let cuenta;
+  try {
+    cuenta = await mp.getAccount();
+  } catch (e) {
+    throw new Error(`MP_MODO=prueba: no se pudo verificar con Mercado Pago que la credencial sea de una `
+      + `cuenta de prueba (${e.message}). No se arranca para no cobrar de verdad.`);
+  }
+  if (!/^TEST/i.test(cuenta.nickname)) {
+    throw new Error('MP_MODO=prueba: la credencial pertenece a una cuenta REAL '
+      + `(usuario "${cuenta.nickname.slice(0, 4)}…"), no a una cuenta de prueba (TESTUSER…). `
+      + `El valor cargado empieza con "${inicioToken}…". No se arranca para no cobrar de verdad.`);
+  }
 }
