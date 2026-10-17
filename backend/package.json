@@ -1,0 +1,15 @@
+{
+  "name": "rifa-lomas-backend",
+  "private": true,
+  "type": "module",
+  "description": "Backend de la rifa solidaria (modo prueba, Mercado Pago simulado)",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "start": "node src/server.js",
+    "db:schema": "node scripts/migrate.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "pg": "^8.16.0"
+  }
+}
