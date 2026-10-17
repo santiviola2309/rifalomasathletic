@@ -1,5 +1,5 @@
 import { crearMpSimulado } from './mp.js';
-import { crearMpReal, esTokenDePrueba } from './mp-real.js';
+import { crearMpReal, esTokenDePrueba, normalizarToken } from './mp-real.js';
 
 /**
  * Elige el adaptador de Mercado Pago según MP_MODO y se niega a arrancar si las
@@ -21,13 +21,14 @@ export function elegirMp(env = process.env) {
     throw new Error(`MP_MODO inválido: "${modo}" (simulado, prueba o produccion)`);
   }
 
-  const token = env.MP_ACCESS_TOKEN;
+  const token = normalizarToken(env.MP_ACCESS_TOKEN);
   if (!token) throw new Error(`MP_MODO=${modo} requiere MP_ACCESS_TOKEN`);
 
   if (modo === 'prueba') {
     if (!esTokenDePrueba(token)) {
       throw new Error('MP_MODO=prueba exige un Access Token de PRUEBA (empieza con TEST-). '
-        + 'Es una credencial de producción: no se arranca para no cobrar de verdad.');
+        + `El valor cargado empieza con "${token.slice(0, 4)}…". `
+        + 'No se arranca para no cobrar de verdad con una credencial de producción.');
     }
     return { modo, baseUrl, mp: crearMpReal({ accessToken: token, baseUrl, usarSandbox: env.MP_SANDBOX === '1' }) };
   }

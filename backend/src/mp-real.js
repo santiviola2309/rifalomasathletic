@@ -19,7 +19,9 @@ export class ErrorMp extends Error {
   }
 }
 
-export const esTokenDePrueba = (t) => typeof t === 'string' && t.startsWith('TEST-');
+// Quita espacios, saltos de línea y comillas que se pegan sin querer junto con el token.
+export const normalizarToken = (t) => String(t ?? '').trim().replace(/^["']+|["']+$/g, '').trim();
+export const esTokenDePrueba = (t) => /^TEST-/i.test(normalizarToken(t));
 
 export function crearMpReal({
   accessToken,
