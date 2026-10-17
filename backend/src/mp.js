@@ -11,7 +11,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export function crearMpSimulado({ baseUrl = 'http://localhost:3000' } = {}) {
   const preferencias = new Map();
   const pagos = new Map();
-  let seq = 1000;
+  // Ids únicos aunque el servidor se reinicie: la base recuerda los pagos viejos y
+  // repetir un id haría que un pago nuevo se tome por uno ya procesado.
+  const prefijo = `${Date.now()}${Math.floor(Math.random() * 1e4)}`;
+  let seq = 0;
 
   return {
     async createPreference({ ref, monto, titulo }) {
@@ -28,7 +31,7 @@ export function crearMpSimulado({ baseUrl = 'http://localhost:3000' } = {}) {
     // --- ayudas de prueba (no existen en Mercado Pago real) ---
     preferencia: (ref) => preferencias.get(`PREF-${ref}`),
     simularPago({ ref, amount, status = 'approved', id }) {
-      const pid = String(id ?? ++seq);
+      const pid = String(id ?? `${prefijo}${++seq}`);
       pagos.set(pid, { id: pid, status, amount, external_reference: ref });
       return pid;
     },
