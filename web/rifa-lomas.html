@@ -115,7 +115,6 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       </div>
       <div class="fields">
         <button class="btn" data-go="buy">Comprar</button>
-        <button class="btn green" data-go="login">Vender</button>
       </div>
 
       <div>
@@ -141,30 +140,17 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       <button class="link panel-link" data-go="panel">Panel de organizadores</button>
     </section>
 
-    <!-- VENDER: código -->
-    <section class="screen" id="s-login" hidden style="display:flex;flex-direction:column;gap:24px">
-      <p class="step">Paso 1 de 3</p>
-      <h2>Vender</h2>
-      <p class="muted">Ingresá tu código de jugador.</p>
-      <div>
-        <input class="code" type="text" id="code" autocomplete="off" autocapitalize="characters" placeholder="TIGRE47" aria-label="Tu código">
-        <p class="err" id="code-msg" role="alert"></p>
-      </div>
-      <button class="btn" id="btn-login">Entrar</button>
-      <p class="muted">Para probar la maqueta: TIGRE47, LEON12 o CONDOR08.</p>
-    </section>
-
-    <!-- VENDER / COMPRAR: datos -->
+    <!-- COMPRAR: datos -->
     <section class="screen" id="s-data" hidden style="display:flex;flex-direction:column;gap:22px">
-      <p class="step" id="data-step">Paso 2 de 3</p>
-      <p class="price" id="price-line" hidden><b>$20.000</b> cada número</p>
-      <p class="muted" id="why-line" hidden>Con tu compra ayudás al club y a la M19 a irse de gira a Nueva Zelanda.</p>
-      <p class="hello" id="hello"></p>
-      <h2 id="data-title">¿Quién compra?</h2>
+      <p class="step">Paso 1 de 2</p>
+      <p class="price"><b>$20.000</b> cada número</p>
+      <p class="muted">Con tu compra ayudás al club y a la M19 a irse de gira a Nueva Zelanda.</p>
+      <h2>Tus datos</h2>
       <div class="fields">
-        <div><label for="b-name">Nombre y apellido</label><input type="text" id="b-name" autocomplete="off"></div>
+        <div><label for="b-name">Tu nombre y apellido</label><input type="text" id="b-name" autocomplete="off"></div>
         <div><label for="b-wsp">WhatsApp</label><input type="tel" id="b-wsp" autocomplete="off" inputmode="tel"></div>
-        <div id="who-wrap" hidden><label for="b-who">Código del jugador que te vendió</label><p class="muted" style="font-size:15px;margin-bottom:8px">Pedíselo al jugador. Si no lo tenés, dejalo vacío.</p><input class="code" type="text" id="b-who" autocomplete="off" autocapitalize="characters" style="font-size:22px"><p class="err" id="who-msg" role="status" style="margin-top:6px"></p></div>
+        <div><label for="b-who">Nombre completo del jugador que te vendió</label><p class="muted" style="font-size:15px;margin-bottom:8px">Nombre y apellido. Es obligatorio.</p><input type="text" id="b-who" autocomplete="off" autocapitalize="words" placeholder="Ej.: Mateo Gómez"></div>
+        <div><label for="b-cat">Categoría del jugador</label><select id="b-cat" style="width:100%;min-height:60px;border-radius:14px;border:2px solid var(--line);background:var(--bg);color:var(--fg);padding:0 16px;font:22px var(--font)"><option value="">Elegí la categoría</option><option value="M8">M8</option><option value="M9">M9</option><option value="M10">M10</option><option value="M11">M11</option><option value="M12">M12</option><option value="M13">M13</option><option value="M14">M14</option><option value="M15">M15</option><option value="M16">M16</option><option value="M17">M17</option><option value="M19">M19</option><option value="Primera">Primera</option><option value="Intermedia">Intermedia</option><option value="Pre-A">Pre-A</option><option value="Pre-B">Pre-B</option><option value="Pre-C">Pre-C</option></select></div>
       </div>
       <div>
         <label for="qty">¿Cuántos números?</label>
@@ -183,7 +169,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
 
     <!-- PAGO -->
     <section class="screen" id="s-pay" hidden style="display:flex;flex-direction:column;gap:24px">
-      <p class="step">Paso 3 de 3</p>
+      <p class="step">Paso 2 de 2</p>
       <h2 id="pay-title">Pagar</h2>
       <p class="muted">Acá se abre Mercado Pago. Se puede pagar con tarjeta, débito o dinero en cuenta, o mandar el link por WhatsApp.</p>
       <p class="muted" id="reserve-line" hidden></p>
@@ -198,7 +184,6 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       <a class="btn green" id="btn-wsp" href="#" target="_blank" rel="noopener" style="text-align:center" hidden>Enviarme mis números por WhatsApp</a>
       <p class="muted" id="done-note">Guardá tus números: tocá el botón y mandátelos por WhatsApp.</p>
       <div class="fields">
-        <button class="btn" id="btn-another">Cargar otra venta</button>
         <button class="btn line" data-go="home">Terminar</button>
       </div>
     </section>
@@ -228,11 +213,6 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
 <script>
 (function () {
   var PRICE = 20000, TOTAL_NUMS = 1700;
-  var ROSTER = {
-    TIGRE47: { name: 'Mateo Gómez', cat: 'M12' },
-    LEON12: { name: 'Valentina Ruiz', cat: 'Juveniles M16' },
-    CONDOR08: { name: 'Lucas Pereyra', cat: 'Primera' }
-  };
   var sales = [
     ['0007', 'Familia Ríos', 'Mateo Gómez', 'M12'], ['0008', 'Familia Ríos', 'Mateo Gómez', 'M12'],
     ['0153', 'Carolina Suárez', 'Valentina Ruiz', 'M16'], ['0154', 'Carolina Suárez', 'Valentina Ruiz', 'M16'],
@@ -240,8 +220,8 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     ['0421', 'Diego Almada', 'Lucas Pereyra', 'Primera'], ['0988', 'Marta López', 'Sofía Benítez', 'M10'],
     ['1201', 'Hernán Costa', 'Tomás Aguirre', 'M14'], ['1202', 'Hernán Costa', 'Tomás Aguirre', 'M14']
   ].map(function (r) { return { n: r[0], buyer: r[1], who: r[2], cat: r[3] }; });
-  var seller = null, qty = 1, mode = 'sell', pending = null, history = [], pick = false;
-  var SCREENS = ['home', 'login', 'data', 'pay', 'done', 'panel'];
+  var qty = 1, pending = null, history = [], pick = false;
+  var SCREENS = ['home', 'data', 'pay', 'done', 'panel'];
   // Modo servidor: lo activa el backend al servir esta página (window.RIFA_API = ''). Sin eso es la maqueta.
   var API = (typeof window.RIFA_API === 'string') ? window.RIFA_API : null;
   var panelKey = null;
@@ -249,7 +229,8 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     sin_stock: 'No quedan números disponibles por ahora.',
     cantidad_invalida: 'La cantidad va de 1 a 20.',
     demasiados_intentos: 'Demasiados intentos. Probá de nuevo en un minuto.',
-    vendedor_invalido: 'El código del vendedor no existe. Revisalo o dejalo vacío.'
+    vendedor_nombre_invalido: 'Escribí el nombre completo del jugador que te vendió (nombre y apellido).',
+    vendedor_categoria_invalida: 'Elegí la categoría del jugador.'
   };
   function api(method, path, body, headers) {
     return fetch(API + path, {
@@ -300,15 +281,12 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     SCREENS.forEach(function (s) { $('s-' + s).hidden = s !== name; });
     $('back').hidden = name === 'home';
     if (name === 'panel') renderPanel();
-    if (name === 'data') prepareData();
     window.scrollTo(0, 0);
   }
   document.querySelectorAll('[data-go]').forEach(function (b) {
     b.addEventListener('click', function () {
       var t = b.dataset.go;
-      if (t === 'buy') { mode = 'buy'; seller = null; go('data'); }
-      else if (t === 'login') { mode = 'sell'; go(seller ? 'data' : 'login'); }
-      else go(t);
+      go(t === 'buy' ? 'data' : t);
     });
   });
   $('back').addEventListener('click', function () {
@@ -317,55 +295,16 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
     go(prev, false);
   });
 
-  function prepareData() {
-    var buy = mode === 'buy';
-    $('data-step').textContent = buy ? 'Paso 1 de 2' : 'Paso 2 de 3';
-    $('data-title').textContent = buy ? 'Tus datos' : '¿Quién compra?';
-    $('who-wrap').hidden = !buy;
-    $('price-line').hidden = false;
-    $('why-line').hidden = !buy;
-    var h = $('hello'); h.textContent = '';
-    if (!buy && seller) { h.append('Hola, '); var b = document.createElement('b'); b.textContent = seller.name + ' (' + seller.cat + ')'; h.appendChild(b); }
+  // Nombre completo: al menos dos palabras de 2 letras o más (nombre y apellido).
+  function nombreCompletoValido(v) {
+    var n = v.trim().replace(/\s+/g, ' ');
+    if (!n || n.length > 80) return false;
+    var partes = n.split(' ');
+    return partes.length >= 2 && partes.every(function (p) {
+      return /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'.-]*$/.test(p) &&
+        p.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g, '').length >= 2;
+    });
   }
-
-  function cleanCode(v) { return v.trim().toUpperCase().replace(/\s+/g, ''); }
-  var whoTimer;
-  function checkWho() {
-    var c = cleanCode($('b-who').value), m = $('who-msg');
-    if (!c) { m.textContent = ''; return; }
-    if (API !== null) {
-      clearTimeout(whoTimer);
-      whoTimer = setTimeout(function () {
-        api('GET', '/api/vendedor/' + encodeURIComponent(c)).then(function (r) {
-          if (cleanCode($('b-who').value) !== c) return;
-          m.style.color = r.ok ? 'var(--ok)' : 'var(--red)';
-          m.textContent = r.ok ? 'Te vende ' + r.body.nombre + ' (' + r.body.categoria + ')'
-            : (r.status === 429 ? 'Probá de nuevo en un minuto.' : 'Ese código no existe.');
-        });
-      }, 350);
-      return;
-    }
-    var p = ROSTER[c];
-    m.style.color = p ? 'var(--ok)' : 'var(--red)';
-    m.textContent = p ? 'Te vende ' + p.name + ' (' + p.cat + ')' : 'Ese código no existe.';
-  }
-  $('b-who').addEventListener('input', checkWho);
-
-  function login() {
-    var c = $('code').value.trim().toUpperCase().replace(/\s+/g, '');
-    if (API !== null) {
-      api('GET', '/api/vendedor/' + encodeURIComponent(c)).then(function (r) {
-        if (!r.ok) { $('code-msg').textContent = 'Ese código no existe. Preguntale a tu manager.'; return; }
-        $('code-msg').textContent = ''; seller = { name: r.body.nombre, cat: r.body.categoria, code: c }; go('data');
-      });
-      return;
-    }
-    var p = ROSTER[c];
-    if (!p) { $('code-msg').textContent = 'Ese código no existe. Preguntale a tu manager.'; return; }
-    $('code-msg').textContent = ''; seller = p; go('data');
-  }
-  $('btn-login').addEventListener('click', login);
-  $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') login(); });
 
   function setQty(n) { qty = Math.max(1, Math.min(20, n)); $('qty').textContent = qty; $('total').textContent = money(qty * PRICE); renderPick(); }
   function renderPick() {
@@ -410,13 +349,13 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   $('btn-pay').addEventListener('click', function () {
     var name = $('b-name').value.trim(), wsp = $('b-wsp').value.trim();
     if (!name || !wsp) { $('form-msg').textContent = 'Falta el nombre o el WhatsApp.'; return; }
-    $('form-msg').textContent = '';
-    var who = seller;
-    if (mode === 'buy' && API === null) {
-      var c = cleanCode($('b-who').value);
-      if (c && !ROSTER[c]) { $('form-msg').textContent = 'El código del vendedor no existe. Revisalo o dejalo vacío.'; return; }
-      who = ROSTER[c] || { name: 'Sin vendedor', cat: '—' };
+    var vNombre = $('b-who').value.trim().replace(/\s+/g, ' '), vCat = $('b-cat').value;
+    if (!nombreCompletoValido(vNombre)) {
+      $('form-msg').textContent = ERRORES.vendedor_nombre_invalido; $('b-who').focus(); return;
     }
+    if (!vCat) { $('form-msg').textContent = ERRORES.vendedor_categoria_invalida; $('b-cat').focus(); return; }
+    $('form-msg').textContent = '';
+    var who = { name: vNombre, cat: vCat };
     var chosen = null;
     if (pick) {
       var r = readPicked();
@@ -424,12 +363,11 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
       chosen = r.nums;
     }
     if (API !== null) {
-      var codigo = mode === 'buy' ? cleanCode($('b-who').value) : (seller && seller.code) || '';
       var btn = $('btn-pay'); btn.disabled = true;
       guardarWsp(wsp);
       api('POST', '/api/crear-pago', {
         nombre: name, whatsapp: wsp, cantidad: qty, modo: pick ? 'elegir' : 'azar',
-        numeros: chosen ? chosen.map(Number) : undefined, codigoVendedor: codigo || undefined
+        numeros: chosen ? chosen.map(Number) : undefined, vendedorNombre: vNombre, vendedorCategoria: vCat
       }).then(function (res) {
         if (!res.ok) {
           btn.disabled = false;
@@ -457,19 +395,12 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   $('btn-paid').addEventListener('click', function () {
     var nums = pending.nums || nextNumbers(pending.qty);
     nums.forEach(function (n) { sales.unshift({ n: n, buyer: pending.buyer, who: pending.who.name, cat: pending.who.cat }); });
-    $('done-line').textContent = pending.buyer + ' compró ' + (pending.qty === 1 ? '1 número' : pending.qty + ' números') + (pending.who.name !== 'Sin vendedor' ? ', vendidos por ' + pending.who.name + '.' : '.');
+    $('done-line').textContent = pending.buyer + ' compró ' + (pending.qty === 1 ? '1 número' : pending.qty + ' números') + ', vendidos por ' + pending.who.name + '.';
     var box = $('done-nums'); box.textContent = '';
     nums.forEach(function (n) { var s = document.createElement('span'); s.className = 'num'; s.textContent = n; box.appendChild(s); });
-    $('btn-another').hidden = mode === 'buy';
     mostrarWsp(nums, null);
     go('done');
   });
-  $('btn-another').addEventListener('click', function () {
-    ['b-name', 'b-wsp', 'b-who'].forEach(function (id) { $(id).value = ''; });
-    $('who-msg').textContent = '';
-    setPick(false); setQty(1); go('data');
-  });
-
   function group(key) {
     var m = {}; sales.forEach(function (s) { m[s[key]] = (m[s[key]] || 0) + 1; });
     return Object.keys(m).map(function (k) { return [k, m[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
@@ -521,7 +452,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   function mostrarOrden(ref, rechazado, intento) {
     intento = intento || 0;
     var t = $('done-title'), l = $('done-line'), box = $('done-nums');
-    $('btn-another').hidden = true; box.textContent = ''; $('btn-wsp').hidden = true;
+    box.textContent = ''; $('btn-wsp').hidden = true;
     function estado(titulo, texto, ok) { t.textContent = titulo; t.className = ok ? 'ok' : ''; l.textContent = texto; }
     if (!intento) estado('Confirmando tu pago…', 'Un momento, estamos verificando.');
     api('GET', '/api/orden/' + encodeURIComponent(ref)).then(function (r) {
