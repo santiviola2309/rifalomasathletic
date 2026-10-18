@@ -136,7 +136,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
         <h2 class="sec">Con cada compra, cupones</h2>
         <p class="coupons">La Genovesa · Pizza Hot · Sushi Club · Pertutti · Camoia</p>
       </div>
-      <p class="muted">Sorteo por la Quiniela Nacional Nocturna el 11 de diciembre. Premios en la cena de fin de año, el 12 de diciembre.</p>
+      <p class="muted">Sorteo y entrega de premios en la cena de fin de año del rugby, el 12 de diciembre.</p>
       <button class="link panel-link" data-go="panel">Panel de organizadores</button>
     </section>
 
@@ -268,7 +268,7 @@ td { padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeri
   function mostrarWsp(nums, ref) {
     var num = waNumero(leerWsp());
     var texto = '¡Hola! Estos son mis números de la Rifa Solidaria del Lomas Athletic Club: ' + nums.join(', ') +
-      '. Sorteo por la Quiniela Nacional Nocturna del 11/12/2026.' + (ref ? ' Orden ' + ref + '.' : '');
+      '. Sorteo en la cena de fin de año del 12/12/2026.' + (ref ? ' Orden ' + ref + '.' : '');
     var a = $('btn-wsp');
     a.href = 'https://wa.me/' + (num || '') + '?text=' + encodeURIComponent(texto);
     a.hidden = false;
