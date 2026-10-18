@@ -21,7 +21,31 @@ function nuevaRef() {
   return `ORD-${s}`;
 }
 
-export const limpiarCodigo = (v) => String(v ?? '').trim().toUpperCase().replace(/\s+/g, '');
+
+// Categorías del club desde infantiles hasta plantel superior.
+export const CATEGORIAS = ['M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M19',
+  'Primera', 'Intermedia', 'Pre-A', 'Pre-B', 'Pre-C'];
+
+export const normalizarNombre = (v) => String(v ?? '').trim().replace(/\s+/g, ' ');
+// "mateo GÓMEZ" -> "Mateo Gómez" (las partículas de, del, la… quedan en minúscula).
+const PARTICULAS = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'di', 'van', 'von']);
+export const formatearNombre = (v) => normalizarNombre(v).split(' ').map((p, i) => {
+  const m = p.toLowerCase();
+  return i > 0 && PARTICULAS.has(m) ? m : m.charAt(0).toUpperCase() + m.slice(1);
+}).join(' ');
+// Clave para agrupar ventas: sin tildes, sin mayúsculas, sin espacios repetidos.
+export const claveNombre = (v) =>
+  normalizarNombre(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+const PALABRA_NOMBRE = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'.-]*$/;
+// Nombre completo: al menos dos palabras de 2 letras o más (nombre y apellido).
+export function nombreCompletoValido(v) {
+  const n = normalizarNombre(v);
+  if (!n || n.length > 80) return false;
+  const palabras = n.split(' ');
+  return palabras.length >= 2 && palabras.every(
+    (p) => PALABRA_NOMBRE.test(p) && p.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g, '').length >= 2);
+}
 
 // Números libres: sin dueño, o reservados con la reserva vencida.
 const DISPONIBLE = `(estado = 'libre' or (estado = 'reservado' and reservado_hasta < now()))`;
@@ -51,9 +75,16 @@ async function tomarElegidos(c, lista) {
   return r.rows.map((x) => x.numero);
 }
 
-function validarEntrada({ nombre, whatsapp, cantidad, modo, numeros }) {
+function validarEntrada({ nombre, whatsapp, cantidad, modo, numeros, vendedorNombre, vendedorCategoria }) {
   if (!String(nombre ?? '').trim() || !String(whatsapp ?? '').trim()) {
     throw new ErrorNegocio('datos_incompletos', 'Falta el nombre o el WhatsApp.');
+  }
+  if (!nombreCompletoValido(vendedorNombre)) {
+    throw new ErrorNegocio('vendedor_nombre_invalido',
+      'Escribí el nombre completo del jugador que te vendió (nombre y apellido).');
+  }
+  if (!CATEGORIAS.includes(vendedorCategoria)) {
+    throw new ErrorNegocio('vendedor_categoria_invalida', 'Elegí la categoría del jugador.');
   }
   if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > MAX_POR_ORDEN) {
     throw new ErrorNegocio('cantidad_invalida', `La cantidad va de 1 a ${MAX_POR_ORDEN}.`);
@@ -81,21 +112,20 @@ export async function crearOrden(pool, entrada) {
   validarEntrada(entrada);
   const { nombre, whatsapp, cantidad, modo } = entrada;
   const numeros = modo === 'elegir' ? [...entrada.numeros].sort((a, b) => a - b) : null;
-  const codigo = limpiarCodigo(entrada.codigoVendedor) || null;
+  const vendedor = formatearNombre(entrada.vendedorNombre);
+  const clave = claveNombre(entrada.vendedorNombre);
 
   return tx(pool, async (c) => {
-    if (codigo) {
-      const j = await c.query('select 1 from jugadores where codigo = $1', [codigo]);
-      if (!j.rowCount) throw new ErrorNegocio('vendedor_invalido', 'Ese código de vendedor no existe.');
-    }
     const id = randomUUID();
     const ref = nuevaRef();
     const monto = cantidad * PRECIO;
     await c.query(
       `insert into ordenes (id, ref, comprador_nombre, comprador_whatsapp, cantidad, modo,
-                            numeros_elegidos, jugador_codigo, monto, expira_en)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(mins => $10))`,
-      [id, ref, nombre.trim(), whatsapp.trim(), cantidad, modo, numeros, codigo, monto, RESERVA_MIN],
+                            numeros_elegidos, vendedor_nombre, vendedor_categoria, vendedor_clave,
+                            monto, expira_en)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + make_interval(mins => $12))`,
+      [id, ref, nombre.trim(), whatsapp.trim(), cantidad, modo, numeros, vendedor,
+        entrada.vendedorCategoria, clave, monto, RESERVA_MIN],
     );
 
     let reservados;
@@ -251,8 +281,8 @@ export async function procesarPago(pool, mp, paymentId) {
     await c.query(`update ordenes set estado = 'pagada' where id = $1`, [ord.id]);
     await guardar('asignado');
 
-    const vend = ord.jugador_codigo
-      ? (await c.query('select nombre, categoria from jugadores where codigo = $1', [ord.jugador_codigo])).rows[0]
+    const vend = ord.vendedor_nombre
+      ? { nombre: ord.vendedor_nombre, categoria: ord.vendedor_categoria }
       : null;
     await c.query(
       `insert into notificaciones (orden_id, tipo, payload) values ($1, 'comprobante', $2)`,
@@ -285,26 +315,22 @@ export async function panel(pool) {
   const q = (sql, args) => pool.query(sql, args).then((r) => r.rows);
   const [tot] = await q(
     `select count(*)::int as vendidos, (count(*) * $1)::int as recaudado from numeros where estado = 'vendido'`, [PRECIO]);
+  // Los datos viejos de pruebas (con código de jugador) se siguen mostrando gracias al join a jugadores.
+  const VEND = `coalesce(o.vendedor_nombre, j.nombre, 'Sin vendedor')`;
+  const CAT = `coalesce(o.vendedor_categoria, j.categoria, '—')`;
+  const DESDE = `from numeros n join ordenes o on o.id = n.orden_id
+     left join jugadores j on j.codigo = o.jugador_codigo where n.estado = 'vendido'`;
   const porJugador = await q(
-    `select coalesce(j.nombre, 'Sin vendedor') as vendedor, coalesce(j.categoria, '—') as categoria, count(*)::int as numeros
-     from numeros n join ordenes o on o.id = n.orden_id left join jugadores j on j.codigo = o.jugador_codigo
-     where n.estado = 'vendido' group by 1, 2 order by numeros desc`);
+    `select (array_agg(${VEND} order by length(regexp_replace(${VEND}, '[A-Za-z .''-]', '', 'g')) desc, o.creada_en desc))[1] as vendedor, ${CAT} as categoria, count(*)::int as numeros
+     ${DESDE}
+     group by coalesce(o.vendedor_clave, lower(j.nombre), ''), ${CAT} order by numeros desc, vendedor`);
   const porCategoria = await q(
-    `select coalesce(j.categoria, '—') as categoria, count(*)::int as numeros
-     from numeros n join ordenes o on o.id = n.orden_id left join jugadores j on j.codigo = o.jugador_codigo
-     where n.estado = 'vendido' group by 1 order by numeros desc`);
+    `select ${CAT} as categoria, count(*)::int as numeros ${DESDE} group by 1 order by numeros desc`);
   const ultimas = await q(
     `select lpad(n.numero::text, 4, '0') as numero, o.comprador_nombre as comprador,
-            coalesce(j.nombre, 'Sin vendedor') as vendedor, coalesce(j.categoria, '—') as categoria
-     from numeros n join ordenes o on o.id = n.orden_id left join jugadores j on j.codigo = o.jugador_codigo
-     where n.estado = 'vendido' order by o.creada_en desc, n.numero limit 30`);
+            ${VEND} as vendedor, ${CAT} as categoria
+     ${DESDE} order by o.creada_en desc, n.numero limit 30`);
   return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas };
-}
-
-// Datos públicos mínimos del vendedor: solo nombre y categoría.
-export async function buscarVendedor(pool, codigo) {
-  const r = await pool.query('select nombre, categoria from jugadores where codigo = $1', [limpiarCodigo(codigo)]);
-  return r.rows[0] ?? null;
 }
 
 // Cruza órdenes, pagos y números. Todo en `problemas` debe ser cero.

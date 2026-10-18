@@ -5,7 +5,7 @@ import { aplicarEsquema, makePool } from './db.js';
 import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
 import {
-  ErrorNegocio, PRECIO, buscarVendedor, cancelarOrden, conciliacion, crearOrden, estadoOrden,
+  ErrorNegocio, PRECIO, cancelarOrden, conciliacion, crearOrden, estadoOrden,
   guardarPreferencia, liberarVencidas, panel, procesarPago,
 } from './orders.js';
 
@@ -56,7 +56,6 @@ export function crearApp({ pool, mp, config = {} }) {
     maxOrdenesPorMinuto = 10,
   } = config;
   const permitido = limitador(maxOrdenesPorMinuto);
-  const permitidoBuscar = limitador(30);   // frena el barrido de códigos de vendedor
 
   async function webhook(req, res, url) {
     const cuerpo = await leerJson(req).catch(() => ({}));
@@ -85,7 +84,7 @@ export function crearApp({ pool, mp, config = {} }) {
     const b = await leerJson(req);
     const orden = await crearOrden(pool, {
       nombre: b.nombre, whatsapp: b.whatsapp, cantidad: b.cantidad, modo: b.modo,
-      numeros: b.numeros, codigoVendedor: b.codigoVendedor,
+      numeros: b.numeros, vendedorNombre: b.vendedorNombre, vendedorCategoria: b.vendedorCategoria,
     });
     try {
       const pref = await mp.createPreference({
@@ -132,11 +131,6 @@ export function crearApp({ pool, mp, config = {} }) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end(paginaWeb(modo));
-      }
-      if (req.method === 'GET' && url.pathname.startsWith('/api/vendedor/')) {
-        if (!permitidoBuscar(req.socket.remoteAddress ?? '?')) return json(res, 429, { error: 'demasiados_intentos' });
-        const v = await buscarVendedor(pool, decodeURIComponent(url.pathname.split('/')[3] ?? ''));
-        return v ? json(res, 200, v) : json(res, 404, { error: 'vendedor_inexistente' });
       }
       if (req.method === 'POST' && url.pathname === '/api/crear-pago') return await crearPago(req, res);
       if (req.method === 'POST' && url.pathname === '/api/mp-webhook') return await webhook(req, res, url);
