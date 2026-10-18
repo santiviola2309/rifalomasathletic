@@ -28,6 +28,12 @@ create table if not exists ordenes (
   check ((modo = 'elegir') = (numeros_elegidos is not null and cardinality(numeros_elegidos) = cantidad))
 );
 
+-- Vendedor: el comprador escribe el nombre completo del jugador y elige su categoría.
+-- (jugador_codigo queda solo por compatibilidad con ventas de pruebas anteriores)
+alter table ordenes add column if not exists vendedor_nombre text;
+alter table ordenes add column if not exists vendedor_categoria text;
+alter table ordenes add column if not exists vendedor_clave text;   -- nombre sin tildes ni mayúsculas
+
 create table if not exists numeros (
   numero          smallint primary key check (numero between 1 and 1700),
   estado          text not null default 'libre' check (estado in ('libre', 'reservado', 'vendido')),
