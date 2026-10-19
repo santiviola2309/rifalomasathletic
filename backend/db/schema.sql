@@ -21,7 +21,7 @@ create table if not exists ordenes (
   jugador_codigo     text references jugadores (codigo),
   monto              int  not null check (monto > 0), -- en pesos
   estado             text not null default 'pendiente'
-                     check (estado in ('pendiente', 'pagada', 'vencida', 'requiere_reembolso')),
+                     check (estado in ('pendiente', 'pagada', 'vencida', 'requiere_reembolso', 'cancelada')),
   expira_en          timestamptz not null,
   mp_preference_id   text,
   creada_en          timestamptz not null default now(),
@@ -41,6 +41,28 @@ alter table ordenes add column if not exists vendedor_clave text;   -- nombre si
 alter table ordenes add column if not exists pagada_en timestamptz;
 alter table ordenes add column if not exists avisado_en timestamptz;
 alter table ordenes add column if not exists wsp_tocado_en timestamptz;
+
+-- Cancelar compras desde el panel. Una compra cancelada libera sus números (se guardan en
+-- numeros_anulados como registro) y nunca vuelve a recibirlos aunque llegue un pago atrasado.
+alter table ordenes add column if not exists cancelada_en timestamptz;
+alter table ordenes add column if not exists numeros_anulados smallint[];
+do $$
+declare c record;
+begin
+  -- Bases creadas antes: la regla de estados no incluía 'cancelada'.
+  for c in select conname from pg_constraint
+           where conrelid = 'ordenes'::regclass and contype = 'c'
+             and pg_get_constraintdef(oid) like '%requiere_reembolso%'
+             and pg_get_constraintdef(oid) not like '%cancelada%'
+  loop
+    execute format('alter table ordenes drop constraint %I', c.conname);
+  end loop;
+  if not exists (select 1 from pg_constraint where conrelid = 'ordenes'::regclass and contype = 'c'
+                 and pg_get_constraintdef(oid) like '%cancelada%') then
+    alter table ordenes add constraint ordenes_estado_valido
+      check (estado in ('pendiente', 'pagada', 'vencida', 'requiere_reembolso', 'cancelada'));
+  end if;
+end $$;
 
 create table if not exists numeros (
   numero          smallint primary key check (numero between 1 and 1700),
