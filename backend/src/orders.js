@@ -75,9 +75,30 @@ async function tomarElegidos(c, lista) {
   return r.rows.map((x) => x.numero);
 }
 
+/**
+ * Devuelve el celular en formato internacional de Argentina (549 + área + número) o null si no
+ * puede ser un celular argentino: código de área + número, sin 0 ni 15, 10 dígitos en total.
+ * Misma regla que usa la web (waNumero), para que ambos lados coincidan.
+ */
+export function normalizarWhatsapp(raw) {
+  let d = String(raw ?? '').replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('54') && d.length >= 12) { d = d.slice(2); if (d.startsWith('9')) d = d.slice(1); }
+  d = d.replace(/^0+/, '');
+  if (d.length === 12) {   // código de área + 15 + número (formato viejo)
+    for (let a = 2; a <= 4; a++) { if (d.substr(a, 2) === '15') { d = d.slice(0, a) + d.slice(a + 2); break; } }
+  }
+  if (d.length !== 10 || /^(\d)\1{9}$/.test(d) || d.startsWith('0')) return null;
+  return `549${d}`;
+}
+
 function validarEntrada({ nombre, whatsapp, cantidad, modo, numeros, vendedorNombre, vendedorCategoria }) {
   if (!String(nombre ?? '').trim() || !String(whatsapp ?? '').trim()) {
     throw new ErrorNegocio('datos_incompletos', 'Falta el nombre o el WhatsApp.');
+  }
+  if (!normalizarWhatsapp(whatsapp)) {
+    throw new ErrorNegocio('whatsapp_invalido',
+      'Revisá tu WhatsApp: código de área y número, sin 0 ni 15. Por ejemplo: 11 5555-1234.');
   }
   if (!nombreCompletoValido(vendedorNombre)) {
     throw new ErrorNegocio('vendedor_nombre_invalido',
@@ -278,7 +299,7 @@ export async function procesarPago(pool, mp, paymentId) {
     await c.query(
       `update numeros set estado = 'vendido', orden_id = $1, reservado_hasta = null
        where numero = any($2::smallint[])`, [ord.id, numeros]);
-    await c.query(`update ordenes set estado = 'pagada' where id = $1`, [ord.id]);
+    await c.query(`update ordenes set estado = 'pagada', pagada_en = now() where id = $1`, [ord.id]);
     await guardar('asignado');
 
     const vend = ord.vendedor_nombre
@@ -330,7 +351,35 @@ export async function panel(pool) {
     `select lpad(n.numero::text, 4, '0') as numero, o.comprador_nombre as comprador,
             ${VEND} as vendedor, ${CAT} as categoria
      ${DESDE} order by o.creada_en desc, n.numero limit 30`);
-  return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas };
+  // Compradores con pago acreditado, para avisarles sus números por WhatsApp desde el panel.
+  const compradores = await q(
+    `select o.ref, o.comprador_nombre as comprador, o.comprador_whatsapp as whatsapp,
+            array_agg(lpad(n.numero::text, 4, '0') order by n.numero) as numeros,
+            ${VEND} as vendedor, ${CAT} as categoria,
+            coalesce(o.pagada_en, o.creada_en) as pagada_en, o.avisado_en, o.wsp_tocado_en
+     from ordenes o join numeros n on n.orden_id = o.id and n.estado = 'vendido'
+     left join jugadores j on j.codigo = o.jugador_codigo
+     where o.estado = 'pagada'
+     group by o.id, j.nombre, j.categoria
+     order by coalesce(o.pagada_en, o.creada_en) desc`);
+  const sinAvisar = compradores.filter((c) => !c.avisado_en).length;
+  return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas, sinAvisar, compradores };
+}
+
+/** Un organizador marca (o desmarca) que ya avisó a este comprador. Solo órdenes pagadas. */
+export async function marcarAvisado(pool, ref, avisado = true) {
+  const r = await pool.query(
+    `update ordenes set avisado_en = case when $2 then now() else null end
+     where ref = $1 and estado = 'pagada' returning avisado_en`, [String(ref ?? ''), !!avisado]);
+  if (!r.rowCount) throw new ErrorNegocio('orden_inexistente', 'No encontramos esa compra.');
+  return { ref, avisado_en: r.rows[0].avisado_en };
+}
+
+/** El comprador tocó su propio botón de WhatsApp. Solo deja constancia: no cuenta como aviso. */
+export async function marcarWspTocado(pool, ref) {
+  await pool.query(
+    `update ordenes set wsp_tocado_en = coalesce(wsp_tocado_en, now())
+     where ref = $1 and estado = 'pagada'`, [String(ref ?? '')]);
 }
 
 // Cruza órdenes, pagos y números. Todo en `problemas` debe ser cero.

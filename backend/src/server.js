@@ -6,7 +6,7 @@ import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
 import {
   ErrorNegocio, PRECIO, cancelarOrden, conciliacion, crearOrden, estadoOrden,
-  guardarPreferencia, liberarVencidas, panel, procesarPago,
+  guardarPreferencia, liberarVencidas, marcarAvisado, marcarWspTocado, panel, procesarPago,
 } from './orders.js';
 
 // La web es un solo HTML. Al servirla desde acá se le avisa que hay servidor (modo API).
@@ -56,6 +56,7 @@ export function crearApp({ pool, mp, config = {} }) {
     maxOrdenesPorMinuto = 10,
   } = config;
   const permitido = limitador(maxOrdenesPorMinuto);
+  const permitidoWsp = limitador(60);
 
   async function webhook(req, res, url) {
     const cuerpo = await leerJson(req).catch(() => ({}));
@@ -83,8 +84,9 @@ export function crearApp({ pool, mp, config = {} }) {
     if (!permitido(ip)) return json(res, 429, { error: 'demasiados_intentos' });
     const b = await leerJson(req);
     const orden = await crearOrden(pool, {
-      nombre: b.nombre, whatsapp: b.whatsapp, cantidad: b.cantidad, modo: b.modo,
-      numeros: b.numeros, vendedorNombre: b.vendedorNombre, vendedorCategoria: b.vendedorCategoria,
+      // La rifa es solo al azar: el servidor ignora cualquier pedido de elegir números.
+      nombre: b.nombre, whatsapp: b.whatsapp, cantidad: b.cantidad, modo: 'azar',
+      vendedorNombre: b.vendedorNombre, vendedorCategoria: b.vendedorCategoria,
     });
     try {
       const pref = await mp.createPreference({
@@ -134,6 +136,16 @@ export function crearApp({ pool, mp, config = {} }) {
       }
       if (req.method === 'POST' && url.pathname === '/api/crear-pago') return await crearPago(req, res);
       if (req.method === 'POST' && url.pathname === '/api/mp-webhook') return await webhook(req, res, url);
+      if (req.method === 'POST' && /^\/api\/orden\/[^/]+\/wsp$/.test(url.pathname)) {
+        if (!permitidoWsp(req.socket.remoteAddress ?? '?')) return json(res, 429, { error: 'demasiados_intentos' });
+        await marcarWspTocado(pool, url.pathname.split('/')[3]);
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/panel/avisado') {
+        if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
+        const b = await leerJson(req);
+        return json(res, 200, await marcarAvisado(pool, b.ref, b.avisado !== false));
+      }
       if (req.method === 'GET' && url.pathname.startsWith('/api/orden/')) {
         const o = await estadoOrden(pool, url.pathname.split('/')[3]);
         return o ? json(res, 200, o) : json(res, 404, { error: 'orden_inexistente' });
