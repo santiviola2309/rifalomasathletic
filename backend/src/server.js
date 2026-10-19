@@ -5,7 +5,7 @@ import { aplicarEsquema, makePool } from './db.js';
 import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
 import {
-  ErrorNegocio, PRECIO, cancelarOrden, conciliacion, crearOrden, estadoOrden,
+  ErrorNegocio, PRECIO, cancelarCompra, cancelarOrden, conciliacion, crearOrden, eliminarCompra, estadoOrden,
   guardarPreferencia, liberarVencidas, marcarAvisado, marcarWspTocado, panel, procesarPago,
 } from './orders.js';
 
@@ -140,6 +140,11 @@ export function crearApp({ pool, mp, config = {} }) {
         if (!permitidoWsp(req.socket.remoteAddress ?? '?')) return json(res, 429, { error: 'demasiados_intentos' });
         await marcarWspTocado(pool, url.pathname.split('/')[3]);
         return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && (url.pathname === '/api/panel/cancelar' || url.pathname === '/api/panel/eliminar')) {
+        if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
+        const b = await leerJson(req);
+        return json(res, 200, url.pathname === '/api/panel/cancelar' ? await cancelarCompra(pool, b.ref) : await eliminarCompra(pool, b.ref));
       }
       if (req.method === 'POST' && url.pathname === '/api/panel/avisado') {
         if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });

@@ -281,7 +281,7 @@ export async function procesarPago(pool, mp, paymentId) {
       await guardar('monto_distinto', `pagó ${p.amount}, la orden vale ${ord.monto}`);
       return { resultado: 'monto_distinto' };
     }
-    if (ord.estado === 'pagada' || ord.estado === 'requiere_reembolso') {
+    if (ord.estado === 'pagada' || ord.estado === 'requiere_reembolso' || ord.estado === 'cancelada') {
       await guardar('requiere_reembolso', `la orden ya estaba ${ord.estado}`);
       return { resultado: 'requiere_reembolso' };
     }
@@ -351,19 +351,59 @@ export async function panel(pool) {
     `select lpad(n.numero::text, 4, '0') as numero, o.comprador_nombre as comprador,
             ${VEND} as vendedor, ${CAT} as categoria
      ${DESDE} order by o.creada_en desc, n.numero limit 30`);
-  // Compradores con pago acreditado, para avisarles sus números por WhatsApp desde el panel.
+  // Compras pagadas (para avisarles sus números por WhatsApp) y canceladas (para devolver el dinero).
   const compradores = await q(
-    `select o.ref, o.comprador_nombre as comprador, o.comprador_whatsapp as whatsapp,
-            array_agg(lpad(n.numero::text, 4, '0') order by n.numero) as numeros,
+    `select o.ref, o.comprador_nombre as comprador, o.comprador_whatsapp as whatsapp, o.estado, o.monto,
+            case when o.estado = 'cancelada'
+                 then coalesce((select array_agg(lpad(x::text, 4, '0') order by x) from unnest(o.numeros_anulados) x), '{}')
+                 else coalesce((select array_agg(lpad(n.numero::text, 4, '0') order by n.numero)
+                                from numeros n where n.orden_id = o.id and n.estado = 'vendido'), '{}') end as numeros,
             ${VEND} as vendedor, ${CAT} as categoria,
-            coalesce(o.pagada_en, o.creada_en) as pagada_en, o.avisado_en, o.wsp_tocado_en
-     from ordenes o join numeros n on n.orden_id = o.id and n.estado = 'vendido'
-     left join jugadores j on j.codigo = o.jugador_codigo
-     where o.estado = 'pagada'
-     group by o.id, j.nombre, j.categoria
-     order by coalesce(o.pagada_en, o.creada_en) desc`);
-  const sinAvisar = compradores.filter((c) => !c.avisado_en).length;
+            coalesce(o.pagada_en, o.creada_en) as pagada_en, o.avisado_en, o.wsp_tocado_en, o.cancelada_en,
+            (select p.mp_payment_id from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_id,
+            (select p.estado_mp from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_estado
+     from ordenes o left join jugadores j on j.codigo = o.jugador_codigo
+     where o.estado in ('pagada', 'cancelada')
+     order by coalesce(o.cancelada_en, o.pagada_en, o.creada_en) desc`);
+  const sinAvisar = compradores.filter((c) => c.estado === 'pagada' && !c.avisado_en).length;
   return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas, sinAvisar, compradores };
+}
+
+/**
+ * Cancela una compra desde el panel: libera sus números y la deja registrada como 'cancelada'.
+ * Si ya tenía un pago aprobado, `devolver` trae los datos para devolverlo desde Mercado Pago
+ * (el sistema no mueve plata). Una compra cancelada no recibe números nunca más.
+ */
+export async function cancelarCompra(pool, ref) {
+  return tx(pool, async (c) => {
+    const o = (await c.query('select * from ordenes where ref = $1 for update', [String(ref ?? '')])).rows[0];
+    if (!o) throw new ErrorNegocio('orden_inexistente', 'No encontramos esa compra.');
+    const pago = (await c.query(
+      `select mp_payment_id as id, estado_mp, monto from pagos where orden_id = $1 and resultado = 'asignado'`, [o.id])).rows[0] ?? null;
+    const devolver = pago && pago.estado_mp === 'approved' ? pago : null;
+    if (o.estado === 'cancelada') return { ref: o.ref, estado: 'cancelada', repetido: true, devolver };
+    const nums = (await c.query('select numero from numeros where orden_id = $1 order by numero', [o.id])).rows.map((r) => r.numero);
+    await c.query(
+      `update numeros set estado = 'libre', orden_id = null, reservado_hasta = null where orden_id = $1`, [o.id]);
+    await c.query(
+      `update ordenes set estado = 'cancelada', cancelada_en = now(), numeros_anulados = $2 where id = $1`, [o.id, nums]);
+    return { ref: o.ref, estado: 'cancelada', numeros: nums.map((n) => String(n).padStart(4, '0')), devolver };
+  });
+}
+
+/** Borra por completo una compra YA cancelada (y sus avisos y pagos registrados). No se puede deshacer. */
+export async function eliminarCompra(pool, ref) {
+  return tx(pool, async (c) => {
+    const o = (await c.query('select * from ordenes where ref = $1 for update', [String(ref ?? '')])).rows[0];
+    if (!o) throw new ErrorNegocio('orden_inexistente', 'No encontramos esa compra.');
+    if (o.estado !== 'cancelada') {
+      throw new ErrorNegocio('primero_cancelar', 'Primero hay que cancelar la compra; después se puede eliminar.');
+    }
+    await c.query('delete from notificaciones where orden_id = $1', [o.id]);
+    await c.query('delete from pagos where orden_id = $1', [o.id]);
+    await c.query('delete from ordenes where id = $1', [o.id]);
+    return { ref: o.ref, eliminada: true };
+  });
 }
 
 /** Un organizador marca (o desmarca) que ya avisó a este comprador. Solo órdenes pagadas. */
@@ -400,9 +440,13 @@ export async function conciliacion(pool) {
   const pagadasSinNumeros = await q(
     `select o.ref from ordenes o where o.estado = 'pagada'
        and (select count(*) from numeros n where n.orden_id = o.id and n.estado = 'vendido') <> o.cantidad`);
+  const canceladasConPago = await q(
+    `select o.ref, p.mp_payment_id, p.monto from ordenes o join pagos p on p.orden_id = o.id and p.resultado = 'asignado'
+     where o.estado = 'cancelada' and p.estado_mp = 'approved'`);
   return {
     coherente: vendidos === esperados && !pagadasSinPago.length && !vendidosSinOrden.length && !pagadasSinNumeros.length,
     vendidos, esperados,
     problemas: { reembolsos, pagadasSinPago, vendidosSinOrden, pagadasSinNumeros },
+    reintegrosPendientes: canceladasConPago,
   };
 }
