@@ -34,6 +34,14 @@ alter table ordenes add column if not exists vendedor_nombre text;
 alter table ordenes add column if not exists vendedor_categoria text;
 alter table ordenes add column if not exists vendedor_clave text;   -- nombre sin tildes ni mayúsculas
 
+-- Aviso a compradores (panel de organizadores): quién ya recibió sus números por WhatsApp.
+--   pagada_en    : cuándo se acreditó el pago (para ordenar y mostrar "hace X min")
+--   avisado_en   : cuándo un organizador avisó al comprador (null = pendiente de aviso)
+--   wsp_tocado_en: cuándo el propio comprador tocó su botón "Enviarme mis números por WhatsApp"
+alter table ordenes add column if not exists pagada_en timestamptz;
+alter table ordenes add column if not exists avisado_en timestamptz;
+alter table ordenes add column if not exists wsp_tocado_en timestamptz;
+
 create table if not exists numeros (
   numero          smallint primary key check (numero between 1 and 1700),
   estado          text not null default 'libre' check (estado in ('libre', 'reservado', 'vendido')),
