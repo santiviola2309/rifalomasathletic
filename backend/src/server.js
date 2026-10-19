@@ -88,7 +88,7 @@ export function crearApp({ pool, mp, config = {} }) {
     });
     try {
       const pref = await mp.createPreference({
-        ref: orden.ref, monto: orden.monto, titulo: `Rifa solidaria Lomas (${b.cantidad})`,
+        ref: orden.ref, monto: orden.monto, titulo: `Rifa de fin de año Lomas (${b.cantidad})`,
         expiraEn: orden.expiraEn,
       });
       await guardarPreferencia(pool, orden.id, pref.id);
