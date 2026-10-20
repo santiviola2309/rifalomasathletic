@@ -76,6 +76,18 @@ insert into numeros (numero)
 select g from generate_series(1, 1700) g
 on conflict do nothing;
 
+-- Cupones de sponsors: una compra de 3 o más números recibe un cupón al azar. Uno por compra.
+create table if not exists cupones (
+  id         uuid primary key,
+  codigo     text not null unique,
+  orden_id   uuid not null unique references ordenes (id),
+  sponsor    text not null,
+  creado_en  timestamptz not null default now(),
+  usado_en   timestamptz,           -- cuándo se canjeó (null = sin canjear)
+  usado_via  text,                  -- 'comercio' (con el PIN del local) o 'panel'
+  anulado_en timestamptz            -- si se canceló la compra, el cupón deja de valer
+);
+
 create table if not exists pagos (
   mp_payment_id      text primary key,
   orden_id           uuid references ordenes (id),
