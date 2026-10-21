@@ -1,20 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import { leerPremios } from './sorteo.js';
 import { aplicarEsquema, makePool } from './db.js';
 import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
-import { leerPines } from './sponsors.js';
 import {
-  ErrorNegocio, PRECIO, cancelarCompra, cancelarOrden, canjearCupon, conciliacion, crearOrden, eliminarCompra, estadoOrden,
-  guardarPreferencia, liberarVencidas, marcarAvisado, marcarWspTocado, panel, procesarPago,
+  ErrorNegocio, PRECIO, cancelarCompra, cancelarOrden, conciliacion, crearOrden, eliminarCompra, estadoOrden,
+  guardarPreferencia, liberarVencidas, marcarAvisado, marcarWspTocado, sortearExtra, panel, procesarPago,
 } from './orders.js';
 
 // La web es un solo HTML. Al servirla desde acá se le avisa que hay servidor (modo API).
 let htmlBase = null;
-function paginaWeb(modo) {
+function paginaWeb(modo, premios = []) {
   htmlBase ??= readFileSync(new URL('../../web/rifa-lomas.html', import.meta.url), 'utf8');
-  return htmlBase.replace('<body>', `<body><script>window.RIFA_API = ""; window.RIFA_MODO = ${JSON.stringify(modo)};</script>`);
+  return htmlBase.replace('<body>', `<body><script>window.RIFA_API = ""; window.RIFA_MODO = ${JSON.stringify(modo)}; window.RIFA_PREMIOS = ${JSON.stringify(premios).replace(/</g, '\\u003c')};</script>`);
 }
 
 const json = (res, status, body) => {
@@ -54,13 +54,11 @@ export function crearApp({ pool, mp, config = {} }) {
     webhookSecret = null,        // si está, el webhook exige firma válida
     panelKey = null,             // si no está, el panel queda deshabilitado
     modo = 'simulado',
+    premios = [],                // premios del sorteo extra que se muestran en la web (PREMIOS_SORTEO_EXTRA)
     maxOrdenesPorMinuto = 10,
-    pines = leerPines(),         // PIN de cada sponsor para canjear cupones (CUPON_PINES)
-    cuponAlComprador = false,    // si es true, el comprador ve su cupón en pantalla (CUPON_AL_COMPRADOR=si)
   } = config;
   const permitido = limitador(maxOrdenesPorMinuto);
   const permitidoWsp = limitador(60);
-  const permitidoCanje = limitador(15);
 
   async function webhook(req, res, url) {
     const cuerpo = await leerJson(req).catch(() => ({}));
@@ -136,7 +134,7 @@ export function crearApp({ pool, mp, config = {} }) {
     try {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(paginaWeb(modo));
+        return res.end(paginaWeb(modo, premios));
       }
       if (req.method === 'POST' && url.pathname === '/api/crear-pago') return await crearPago(req, res);
       if (req.method === 'POST' && url.pathname === '/api/mp-webhook') return await webhook(req, res, url);
@@ -145,16 +143,10 @@ export function crearApp({ pool, mp, config = {} }) {
         await marcarWspTocado(pool, url.pathname.split('/')[3]);
         return json(res, 200, { ok: true });
       }
-      if (req.method === 'POST' && url.pathname === '/api/canje') {
-        if (!permitidoCanje(req.socket.remoteAddress ?? '?')) return json(res, 429, { error: 'demasiados_intentos', mensaje: 'Demasiados intentos. Probá de nuevo en un minuto.' });
-        if (!Object.keys(pines).length) return json(res, 503, { error: 'canje_no_configurado', mensaje: 'El canje todavía no está habilitado.' });
-        const b = await leerJson(req);
-        return json(res, 200, await canjearCupon(pool, { codigo: b.codigo, pin: b.pin, pines }));
-      }
-      if (req.method === 'POST' && url.pathname === '/api/panel/canjear') {
+      if (req.method === 'POST' && url.pathname === '/api/panel/sorteo-extra') {
         if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
         const b = await leerJson(req);
-        return json(res, 200, await canjearCupon(pool, { codigo: b.codigo, via: 'panel' }));
+        return json(res, 200, await sortearExtra(pool, { premio: b.premio }));
       }
       if (req.method === 'POST' && (url.pathname === '/api/panel/cancelar' || url.pathname === '/api/panel/eliminar')) {
         if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
@@ -167,7 +159,7 @@ export function crearApp({ pool, mp, config = {} }) {
         return json(res, 200, await marcarAvisado(pool, b.ref, b.avisado !== false));
       }
       if (req.method === 'GET' && url.pathname.startsWith('/api/orden/')) {
-        const o = await estadoOrden(pool, url.pathname.split('/')[3], { conCupon: cuponAlComprador });
+        const o = await estadoOrden(pool, url.pathname.split('/')[3]);
         return o ? json(res, 200, o) : json(res, 404, { error: 'orden_inexistente' });
       }
       if (url.pathname.startsWith('/mock-mp/') && modo === 'simulado' && mp.simularPago) return await mockCheckout(req, res, url);
@@ -197,7 +189,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     pool, mp,
     config: {
       baseUrl, modo, webhookSecret: process.env.MP_WEBHOOK_SECRET || null, panelKey: process.env.PANEL_KEY || null,
-      cuponAlComprador: process.env.CUPON_AL_COMPRADOR === 'si',
+      premios: leerPremios(process.env.PREMIOS_SORTEO_EXTRA),
     },
   });
   setInterval(() => liberarVencidas(pool).catch(console.error), 60_000).unref();

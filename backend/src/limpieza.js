@@ -45,6 +45,7 @@ export async function limpiarPruebas(pool, { conservar = [], confirmar = false }
   await tx(pool, async (c) => {
     await c.query(
       `update numeros set estado = 'libre', orden_id = null, reservado_hasta = null where orden_id = any($1)`, [ids]);
+    await c.query('delete from sorteo_extra where orden_id = any($1)', [ids]);
     await c.query('delete from cupones where orden_id = any($1)', [ids]);
     await c.query('delete from notificaciones where orden_id = any($1)', [ids]);
     await c.query('delete from pagos where orden_id = any($1)', [ids]);

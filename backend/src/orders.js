@@ -1,6 +1,6 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { tx } from './db.js';
-import { CUPON_DESDE, SPONSORS, nombreSponsor, pinCorrecto } from './sponsors.js';
+import { SORTEO_CADA, chancesDe } from './sorteo.js';
 
 export const PRECIO = 20000;
 export const TOTAL_NUMEROS = 1700;
@@ -231,37 +231,6 @@ async function conseguirNumeros(c, ord) {
   return tengo.sort((a, b) => a - b);
 }
 
-function nuevoCodigoCupon() {
-  let s = '';
-  for (const b of randomBytes(6)) s += ALFABETO[b % ALFABETO.length];
-  return `LOMAS-${s}`;
-}
-
-/**
- * Una compra de CUPON_DESDE números o más recibe un cupón de un sponsor al azar, uno solo por compra.
- * El azar es parejo: se sortea entre los sponsors que menos cupones entregaron, así todos salen parecido.
- */
-async function emitirCupon(c, ord) {
-  if (ord.cantidad < CUPON_DESDE) return null;
-  const previo = (await c.query('select codigo, sponsor from cupones where orden_id = $1', [ord.id])).rows[0];
-  if (previo) return previo;
-  const cuentas = new Map(SPONSORS.map((s) => [s.id, 0]));
-  for (const r of (await c.query('select sponsor, count(*)::int n from cupones group by sponsor')).rows) {
-    if (cuentas.has(r.sponsor)) cuentas.set(r.sponsor, r.n);
-  }
-  const minimo = Math.min(...cuentas.values());
-  const candidatos = [...cuentas].filter(([, n]) => n === minimo).map(([id]) => id);
-  const sponsor = candidatos[randomInt(candidatos.length)];
-  for (let intento = 0; intento < 8; intento++) {
-    const codigo = nuevoCodigoCupon();
-    const r = await c.query(
-      `insert into cupones (id, codigo, orden_id, sponsor) values ($1, $2, $3, $4)
-       on conflict (codigo) do nothing returning codigo, sponsor`, [randomUUID(), codigo, ord.id, sponsor]);
-    if (r.rows[0]) return r.rows[0];
-  }
-  throw new Error('No se pudo generar un código de cupón único.');
-}
-
 /**
  * Procesa el aviso de un pago de Mercado Pago. Es seguro llamarlo muchas veces,
  * y en paralelo, para el mismo pago:
@@ -333,7 +302,6 @@ export async function procesarPago(pool, mp, paymentId) {
        where numero = any($2::smallint[])`, [ord.id, numeros]);
     await c.query(`update ordenes set estado = 'pagada', pagada_en = now() where id = $1`, [ord.id]);
     await guardar('asignado');
-    const cupon = await emitirCupon(c, ord);
 
     const vend = ord.vendedor_nombre
       ? { nombre: ord.vendedor_nombre, categoria: ord.vendedor_categoria }
@@ -345,9 +313,9 @@ export async function procesarPago(pool, mp, paymentId) {
         comprador: ord.comprador_nombre,
         numeros: numeros.map((n) => String(n).padStart(4, '0')),
         vendedor: vend ? `${vend.nombre} (${vend.categoria})` : null,
-        cupon: cupon ? { codigo: cupon.codigo, sponsor: nombreSponsor(cupon.sponsor) } : null,
+        chances: chancesDe(ord.cantidad),
       })]);
-    return { resultado: 'asignado', numeros, cupon };
+    return { resultado: 'asignado', numeros, chances: chancesDe(ord.cantidad) };
   });
 }
 
@@ -355,16 +323,14 @@ export async function procesarPago(pool, mp, paymentId) {
 // Consultas
 // ---------------------------------------------------------------------------
 
-export async function estadoOrden(pool, ref, { conCupon = true } = {}) {
+export async function estadoOrden(pool, ref) {
   const o = (await pool.query('select * from ordenes where ref = $1', [ref])).rows[0];
   if (!o) return null;
   const out = { ref: o.ref, estado: o.estado, monto: o.monto, expiraEn: o.expira_en };
   if (o.estado === 'pagada') {
     const n = await pool.query(`select numero from numeros where orden_id = $1 and estado = 'vendido' order by numero`, [o.id]);
     out.numeros = n.rows.map((r) => String(r.numero).padStart(4, '0'));
-    const cp = conCupon && (await pool.query(
-      'select codigo, sponsor, usado_en from cupones where orden_id = $1 and anulado_en is null', [o.id])).rows[0];
-    if (cp) out.cupon = { codigo: cp.codigo, sponsor: cp.sponsor, nombre: nombreSponsor(cp.sponsor), usado: !!cp.usado_en };
+    out.chances = chancesDe(o.cantidad);
   }
   return out;
 }
@@ -399,23 +365,24 @@ export async function panel(pool) {
             coalesce(o.pagada_en, o.creada_en) as pagada_en, o.avisado_en, o.wsp_tocado_en, o.cancelada_en,
             (select p.mp_payment_id from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_id,
             (select p.estado_mp from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_estado,
-            (select cp.codigo from cupones cp where cp.orden_id = o.id) as cupon_codigo,
-            (select cp.sponsor from cupones cp where cp.orden_id = o.id) as cupon_sponsor,
-            (select cp.usado_en from cupones cp where cp.orden_id = o.id) as cupon_usado_en,
-            (select cp.anulado_en from cupones cp where cp.orden_id = o.id) as cupon_anulado_en
+            o.cantidad
      from ordenes o left join jugadores j on j.codigo = o.jugador_codigo
      where o.estado in ('pagada', 'cancelada')
      order by coalesce(o.cancelada_en, o.pagada_en, o.creada_en) desc`);
   const sinAvisar = compradores.filter((c) => c.estado === 'pagada' && !c.avisado_en).length;
-  const filasCupones = await q(
-    `select sponsor, count(*) filter (where anulado_en is null)::int as entregados,
-            count(*) filter (where anulado_en is null and usado_en is not null)::int as canjeados
-     from cupones group by sponsor`);
-  const cupones = SPONSORS.map((s) => {
-    const f = filasCupones.find((x) => x.sponsor === s.id);
-    return { sponsor: s.id, nombre: s.nombre, entregados: f?.entregados ?? 0, canjeados: f?.canjeados ?? 0 };
-  });
-  return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas, sinAvisar, compradores, cupones };
+  for (const c of compradores) c.chances = c.estado === 'pagada' ? chancesDe(c.cantidad) : 0;
+  const ganadores = await q(
+    `select s.id, s.premio, s.chance, s.sorteado_en, s.anulado_en, o.ref, o.comprador_nombre as comprador,
+            o.comprador_whatsapp as whatsapp
+     from sorteo_extra s join ordenes o on o.id = s.orden_id order by s.id`);
+  const vivos = compradores.filter((c) => c.chances > 0);
+  const sorteoExtra = {
+    cada: SORTEO_CADA,
+    participantes: vivos.length,
+    chances: vivos.reduce((t, c) => t + c.chances, 0),
+    ganadores,
+  };
+  return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas, sinAvisar, compradores, sorteoExtra };
 }
 
 /**
@@ -436,10 +403,8 @@ export async function cancelarCompra(pool, ref) {
       `update numeros set estado = 'libre', orden_id = null, reservado_hasta = null where orden_id = $1`, [o.id]);
     await c.query(
       `update ordenes set estado = 'cancelada', cancelada_en = now(), numeros_anulados = $2 where id = $1`, [o.id, nums]);
-    const cp = (await c.query(
-      `update cupones set anulado_en = now() where orden_id = $1 and anulado_en is null returning codigo, usado_en`, [o.id])).rows[0];
-    return { ref: o.ref, estado: 'cancelada', numeros: nums.map((n) => String(n).padStart(4, '0')), devolver,
-      cupon: cp ? { codigo: cp.codigo, yaCanjeado: !!cp.usado_en } : null };
+    await c.query(`update sorteo_extra set anulado_en = now() where orden_id = $1 and anulado_en is null`, [o.id]);
+    return { ref: o.ref, estado: 'cancelada', numeros: nums.map((n) => String(n).padStart(4, '0')), devolver };
   });
 }
 
@@ -451,6 +416,7 @@ export async function eliminarCompra(pool, ref) {
     if (o.estado !== 'cancelada') {
       throw new ErrorNegocio('primero_cancelar', 'Primero hay que cancelar la compra; después se puede eliminar.');
     }
+    await c.query('delete from sorteo_extra where orden_id = $1', [o.id]);
     await c.query('delete from cupones where orden_id = $1', [o.id]);
     await c.query('delete from notificaciones where orden_id = $1', [o.id]);
     await c.query('delete from pagos where orden_id = $1', [o.id]);
@@ -476,42 +442,37 @@ export async function marcarWspTocado(pool, ref) {
 }
 
 // ---------------------------------------------------------------------------
-// Canje de cupones
+// Sorteo extra de premios de sponsors
 // ---------------------------------------------------------------------------
 
-/** "lomas-k7m2qx", "K7M2QX" o "LOMAS K7M2QX" -> "LOMAS-K7M2QX" */
-export function normalizarCodigoCupon(v) {
-  const t = String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const cuerpo = t.startsWith('LOMAS') ? t.slice(5) : t;
-  return cuerpo.length === 6 ? `LOMAS-${cuerpo}` : null;
-}
-
-const fechaCorta = (d) => new Date(d).toLocaleString('es-AR', {
-  timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-});
-
 /**
- * Canjea un cupón. Desde un comercio hay que dar el PIN de ese sponsor (`pines`); desde el panel
- * de organizadores no (`via: 'panel'`). Un cupón se canjea una sola vez.
- * Si el código o el PIN no coinciden, el mensaje es el mismo: no se puede probar códigos para ver cuáles existen.
+ * Sortea un premio entre las chances de las compras pagadas (una chance cada SORTEO_CADA números).
+ * Una misma compra gana una sola vez. El azar es el del sistema (crypto), sin intervención de nadie.
  */
-export async function canjearCupon(pool, { codigo, pin, pines, via = 'comercio' }) {
-  const cod = normalizarCodigoCupon(codigo);
-  const incorrecto = () => new ErrorNegocio('cupon_o_pin_incorrecto', 'El código o el PIN no son correctos.');
+export async function sortearExtra(pool, { premio }) {
+  const nombre = String(premio ?? '').trim().slice(0, 120);
+  if (!nombre) throw new ErrorNegocio('premio_vacio', 'Escribí qué premio se sortea.');
   return tx(pool, async (c) => {
-    const cp = cod ? (await c.query('select * from cupones where codigo = $1 for update', [cod])).rows[0] : null;
-    if (!cp) {
-      if (via === 'comercio') throw incorrecto();
-      throw new ErrorNegocio('cupon_inexistente', 'No existe ese cupón.');
-    }
-    if (via === 'comercio' && !pinCorrecto(pines, cp.sponsor, pin)) throw incorrecto();
-    if (cp.anulado_en) throw new ErrorNegocio('cupon_anulado', 'Este cupón no vale: la compra fue cancelada.');
-    if (cp.usado_en) {
-      throw new ErrorNegocio('cupon_usado', `Este cupón ya fue canjeado (${fechaCorta(cp.usado_en)}).`, { usado_en: cp.usado_en });
+    await c.query(`select pg_advisory_xact_lock(hashtext('sorteo_extra'))`);
+    const filas = (await c.query(
+      `select o.id, o.ref, o.comprador_nombre, o.comprador_whatsapp, o.cantidad from ordenes o
+       where o.estado = 'pagada' and o.cantidad >= $1
+         and not exists (select 1 from sorteo_extra s where s.orden_id = o.id and s.anulado_en is null)
+       order by o.ref`, [SORTEO_CADA])).rows;
+    const total = filas.reduce((t, o) => t + chancesDe(o.cantidad), 0);
+    if (!total) throw new ErrorNegocio('sin_participantes', 'No hay compras participando (o todas ya ganaron un premio).');
+    let k = randomInt(total);
+    let ganador = filas[0];
+    for (const o of filas) {
+      const n = chancesDe(o.cantidad);
+      if (k < n) { ganador = o; break; }
+      k -= n;
     }
     const r = (await c.query(
-      `update cupones set usado_en = now(), usado_via = $2 where id = $1 returning usado_en`, [cp.id, via])).rows[0];
-    return { codigo: cp.codigo, sponsor: cp.sponsor, nombre: nombreSponsor(cp.sponsor), canjeado: true, usado_en: r.usado_en };
+      `insert into sorteo_extra (premio, orden_id, chance) values ($1, $2, $3) returning id, sorteado_en`,
+      [nombre, ganador.id, k + 1])).rows[0];
+    return { id: r.id, premio: nombre, ref: ganador.ref, comprador: ganador.comprador_nombre,
+      whatsapp: ganador.comprador_whatsapp, participantes: filas.length, chances: total };
   });
 }
 
