@@ -76,7 +76,7 @@ insert into numeros (numero)
 select g from generate_series(1, 1700) g
 on conflict do nothing;
 
--- Cupones de sponsors: una compra de 3 o más números recibe un cupón al azar. Uno por compra.
+-- (En desuso) cupones de sponsors de una versión anterior. Se conserva la tabla por los datos ya cargados.
 create table if not exists cupones (
   id         uuid primary key,
   codigo     text not null unique,
@@ -86,6 +86,16 @@ create table if not exists cupones (
   usado_en   timestamptz,           -- cuándo se canjeó (null = sin canjear)
   usado_via  text,                  -- 'comercio' (con el PIN del local) o 'panel'
   anulado_en timestamptz            -- si se canceló la compra, el cupón deja de valer
+);
+
+-- Sorteo extra de premios de sponsors. Cada fila es un premio ya sorteado y su ganador (una compra).
+create table if not exists sorteo_extra (
+  id          bigserial primary key,
+  premio      text not null,
+  orden_id    uuid not null references ordenes (id),
+  chance      int  not null,            -- número de chance que salió dentro de esa compra
+  sorteado_en timestamptz not null default now(),
+  anulado_en  timestamptz               -- si se canceló la compra ganadora
 );
 
 create table if not exists pagos (
