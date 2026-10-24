@@ -1,14 +1,9 @@
--- Esquema de la rifa. Idempotente: se puede correr más de una vez.
+-- Esquema del bingo (cartones numerados). Idempotente: se puede correr más de una vez.
+-- Usar una base de datos NUEVA para el bingo: la tabla "numeros" son los cartones (1 a 500).
 -- Reglas de integridad que sostiene la base (no el código de la web):
---   * cada número (0001-1700) es una fila única: no se puede vender dos veces
+--   * cada cartón (0001-0500) es una fila única: no se puede vender dos veces
 --   * un pago de Mercado Pago se guarda una sola vez (mp_payment_id es clave)
 --   * una orden tiene como máximo un pago "asignado" (índice parcial)
-
-create table if not exists jugadores (
-  codigo    text primary key check (codigo = upper(codigo)),
-  nombre    text not null,
-  categoria text not null
-);
 
 create table if not exists ordenes (
   id                 uuid primary key,
@@ -18,7 +13,6 @@ create table if not exists ordenes (
   cantidad           int  not null check (cantidad between 1 and 20),
   modo               text not null check (modo in ('azar', 'elegir')),
   numeros_elegidos   smallint[],
-  jugador_codigo     text references jugadores (codigo),
   monto              int  not null check (monto > 0), -- en pesos
   estado             text not null default 'pendiente'
                      check (estado in ('pendiente', 'pagada', 'vencida', 'requiere_reembolso', 'cancelada')),
@@ -28,19 +22,11 @@ create table if not exists ordenes (
   check ((modo = 'elegir') = (numeros_elegidos is not null and cardinality(numeros_elegidos) = cantidad))
 );
 
--- Vendedor: el comprador escribe el nombre completo del jugador y elige su categoría.
--- (jugador_codigo queda solo por compatibilidad con ventas de pruebas anteriores)
-alter table ordenes add column if not exists vendedor_nombre text;
-alter table ordenes add column if not exists vendedor_categoria text;
-alter table ordenes add column if not exists vendedor_clave text;   -- nombre sin tildes ni mayúsculas
+-- Entradas anticipadas de la compra (cada una incluye 1 cartón). cantidad = entradas + cartones sueltos.
+alter table ordenes add column if not exists entradas int not null default 0 check (entradas >= 0);
 
--- Aviso a compradores (panel de organizadores): quién ya recibió sus números por WhatsApp.
---   pagada_en    : cuándo se acreditó el pago (para ordenar y mostrar "hace X min")
---   avisado_en   : cuándo un organizador avisó al comprador (null = pendiente de aviso)
---   wsp_tocado_en: cuándo el propio comprador tocó su botón "Enviarme mis números por WhatsApp"
+-- pagada_en: cuándo se acreditó el pago (para ordenar el registro de compras del panel)
 alter table ordenes add column if not exists pagada_en timestamptz;
-alter table ordenes add column if not exists avisado_en timestamptz;
-alter table ordenes add column if not exists wsp_tocado_en timestamptz;
 
 -- Cancelar compras desde el panel. Una compra cancelada libera sus números (se guardan en
 -- numeros_anulados como registro) y nunca vuelve a recibirlos aunque llegue un pago atrasado.
@@ -65,7 +51,7 @@ begin
 end $$;
 
 create table if not exists numeros (
-  numero          smallint primary key check (numero between 1 and 1700),
+  numero          smallint primary key check (numero between 1 and 9999),
   estado          text not null default 'libre' check (estado in ('libre', 'reservado', 'vendido')),
   orden_id        uuid references ordenes (id),
   reservado_hasta timestamptz,
@@ -73,30 +59,8 @@ create table if not exists numeros (
 );
 
 insert into numeros (numero)
-select g from generate_series(1, 1700) g
+select g from generate_series(1, 500) g
 on conflict do nothing;
-
--- (En desuso) cupones de sponsors de una versión anterior. Se conserva la tabla por los datos ya cargados.
-create table if not exists cupones (
-  id         uuid primary key,
-  codigo     text not null unique,
-  orden_id   uuid not null unique references ordenes (id),
-  sponsor    text not null,
-  creado_en  timestamptz not null default now(),
-  usado_en   timestamptz,           -- cuándo se canjeó (null = sin canjear)
-  usado_via  text,                  -- 'comercio' (con el PIN del local) o 'panel'
-  anulado_en timestamptz            -- si se canceló la compra, el cupón deja de valer
-);
-
--- Sorteo extra de premios de sponsors. Cada fila es un premio ya sorteado y su ganador (una compra).
-create table if not exists sorteo_extra (
-  id          bigserial primary key,
-  premio      text not null,
-  orden_id    uuid not null references ordenes (id),
-  chance      int  not null,            -- número de chance que salió dentro de esa compra
-  sorteado_en timestamptz not null default now(),
-  anulado_en  timestamptz               -- si se canceló la compra ganadora
-);
 
 create table if not exists pagos (
   mp_payment_id      text primary key,
