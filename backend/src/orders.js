@@ -314,6 +314,7 @@ export async function estadoOrden(pool, ref) {
   if (!o) return null;
   const out = { ref: o.ref, estado: o.estado, monto: o.monto, expiraEn: o.expira_en };
   if (o.estado === 'pagada') {
+    out.comprador = o.comprador_nombre;
     const n = await pool.query(`select numero from numeros where orden_id = $1 and estado = 'vendido' order by numero`, [o.id]);
     out.numeros = n.rows.map((r) => String(r.numero).padStart(4, '0'));
     out.entradas = o.entradas;
