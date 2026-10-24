@@ -1,11 +1,10 @@
-import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { tx } from './db.js';
-import { SORTEO_CADA, chancesDe } from './sorteo.js';
+import { MAX_CARTONES_POR_COMPRA, PRECIO_CARTON, PRECIO_ENTRADA, TOTAL_CARTONES } from './evento.js';
 
-export const PRECIO = 20000;
-export const TOTAL_NUMEROS = 1700;
+export const TOTAL_NUMEROS = TOTAL_CARTONES;   // los "números" son los cartones
 export const RESERVA_MIN = 10;
-const MAX_POR_ORDEN = 20;
+const MAX_POR_ORDEN = MAX_CARTONES_POR_COMPRA;
 
 export class ErrorNegocio extends Error {
   constructor(codigo, mensaje, extra = {}) {
@@ -23,10 +22,6 @@ function nuevaRef() {
 }
 
 
-// Categorías del club desde infantiles hasta plantel superior.
-export const CATEGORIAS = ['M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M19',
-  'Primera', 'Intermedia', 'Pre-A', 'Pre-B', 'Pre-C'];
-
 export const normalizarNombre = (v) => String(v ?? '').trim().replace(/\s+/g, ' ');
 // "mateo GÓMEZ" -> "Mateo Gómez" (las partículas de, del, la… quedan en minúscula).
 const PARTICULAS = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'di', 'van', 'von']);
@@ -34,10 +29,6 @@ export const formatearNombre = (v) => normalizarNombre(v).split(' ').map((p, i) 
   const m = p.toLowerCase();
   return i > 0 && PARTICULAS.has(m) ? m : m.charAt(0).toUpperCase() + m.slice(1);
 }).join(' ');
-// Clave para agrupar ventas: sin tildes, sin mayúsculas, sin espacios repetidos.
-export const claveNombre = (v) =>
-  normalizarNombre(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-
 const PALABRA_NOMBRE = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'.-]*$/;
 // Nombre completo: al menos dos palabras de 2 letras o más (nombre y apellido).
 export function nombreCompletoValido(v) {
@@ -93,33 +84,33 @@ export function normalizarWhatsapp(raw) {
   return `549${d}`;
 }
 
-function validarEntrada({ nombre, whatsapp, cantidad, modo, numeros, vendedorNombre, vendedorCategoria }) {
+function validarEntrada({ nombre, whatsapp, entradas, sueltos, modo, numeros }) {
   if (!String(nombre ?? '').trim() || !String(whatsapp ?? '').trim()) {
-    throw new ErrorNegocio('datos_incompletos', 'Falta el nombre o el WhatsApp.');
+    throw new ErrorNegocio('datos_incompletos', 'Falta el nombre o el teléfono.');
+  }
+  if (!nombreCompletoValido(nombre)) {
+    throw new ErrorNegocio('nombre_invalido', 'Escribí tu nombre y apellido.');
   }
   if (!normalizarWhatsapp(whatsapp)) {
     throw new ErrorNegocio('whatsapp_invalido',
-      'Revisá tu WhatsApp: código de área y número, sin 0 ni 15. Por ejemplo: 11 5555-1234.');
+      'Revisá tu teléfono: código de área y número, sin 0 ni 15. Por ejemplo: 11 5555-1234.');
   }
-  if (!nombreCompletoValido(vendedorNombre)) {
-    throw new ErrorNegocio('vendedor_nombre_invalido',
-      'Escribí el nombre completo del jugador que te vendió (nombre y apellido).');
+  if (!Number.isInteger(entradas) || !Number.isInteger(sueltos) || entradas < 0 || sueltos < 0) {
+    throw new ErrorNegocio('cantidad_invalida', 'Revisá la cantidad de entradas y de cartones.');
   }
-  if (!CATEGORIAS.includes(vendedorCategoria)) {
-    throw new ErrorNegocio('vendedor_categoria_invalida', 'Elegí la categoría del jugador.');
-  }
-  if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > MAX_POR_ORDEN) {
-    throw new ErrorNegocio('cantidad_invalida', `La cantidad va de 1 a ${MAX_POR_ORDEN}.`);
+  const cantidad = entradas + sueltos;
+  if (cantidad < 1 || cantidad > MAX_POR_ORDEN) {
+    throw new ErrorNegocio('cantidad_invalida', `Podés pedir de 1 a ${MAX_POR_ORDEN} cartones por compra.`);
   }
   if (modo !== 'azar' && modo !== 'elegir') throw new ErrorNegocio('modo_invalido', 'Modo inválido.');
   if (modo === 'elegir') {
     if (!Array.isArray(numeros) || numeros.length !== cantidad) {
-      throw new ErrorNegocio('numeros_invalidos', 'La cantidad de números elegidos no coincide.');
+      throw new ErrorNegocio('numeros_invalidos', 'La cantidad de cartones elegidos no coincide.');
     }
     const vistos = new Set();
     for (const n of numeros) {
       if (!Number.isInteger(n) || n < 1 || n > TOTAL_NUMEROS) {
-        throw new ErrorNegocio('numeros_invalidos', `Los números van de 0001 a ${TOTAL_NUMEROS}.`);
+        throw new ErrorNegocio('numeros_invalidos', `Los cartones van del 1 al ${TOTAL_NUMEROS}.`);
       }
       if (vistos.has(n)) {
         throw new ErrorNegocio('numeros_repetidos', `Repetiste el ${String(n).padStart(4, '0')}.`);
@@ -129,25 +120,24 @@ function validarEntrada({ nombre, whatsapp, cantidad, modo, numeros, vendedorNom
   }
 }
 
+export const montoDe = (entradas, sueltos) => entradas * PRECIO_ENTRADA + sueltos * PRECIO_CARTON;
+
 // Crea la orden y reserva los números (azar o elegidos) por RESERVA_MIN minutos.
 export async function crearOrden(pool, entrada) {
   validarEntrada(entrada);
-  const { nombre, whatsapp, cantidad, modo } = entrada;
+  const { nombre, whatsapp, entradas, sueltos, modo } = entrada;
+  const cantidad = entradas + sueltos;
   const numeros = modo === 'elegir' ? [...entrada.numeros].sort((a, b) => a - b) : null;
-  const vendedor = formatearNombre(entrada.vendedorNombre);
-  const clave = claveNombre(entrada.vendedorNombre);
 
   return tx(pool, async (c) => {
     const id = randomUUID();
     const ref = nuevaRef();
-    const monto = cantidad * PRECIO;
+    const monto = montoDe(entradas, sueltos);
     await c.query(
-      `insert into ordenes (id, ref, comprador_nombre, comprador_whatsapp, cantidad, modo,
-                            numeros_elegidos, vendedor_nombre, vendedor_categoria, vendedor_clave,
-                            monto, expira_en)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + make_interval(mins => $12))`,
-      [id, ref, nombre.trim(), whatsapp.trim(), cantidad, modo, numeros, vendedor,
-        entrada.vendedorCategoria, clave, monto, RESERVA_MIN],
+      `insert into ordenes (id, ref, comprador_nombre, comprador_whatsapp, cantidad, entradas, modo,
+                            numeros_elegidos, monto, expira_en)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(mins => $10))`,
+      [id, ref, formatearNombre(nombre), whatsapp.trim(), cantidad, entradas, modo, numeros, monto, RESERVA_MIN],
     );
 
     let reservados;
@@ -161,7 +151,7 @@ export async function crearOrden(pool, entrada) {
     } else {
       reservados = await tomarAzar(c, cantidad);
       if (reservados.length !== cantidad) {
-        throw new ErrorNegocio('sin_stock', 'No quedan números disponibles por ahora.');
+        throw new ErrorNegocio('sin_stock', 'No quedan cartones disponibles por ahora.');
       }
     }
     await c.query(
@@ -303,19 +293,15 @@ export async function procesarPago(pool, mp, paymentId) {
     await c.query(`update ordenes set estado = 'pagada', pagada_en = now() where id = $1`, [ord.id]);
     await guardar('asignado');
 
-    const vend = ord.vendedor_nombre
-      ? { nombre: ord.vendedor_nombre, categoria: ord.vendedor_categoria }
-      : null;
     await c.query(
       `insert into notificaciones (orden_id, tipo, payload) values ($1, 'comprobante', $2)`,
       [ord.id, JSON.stringify({
         para: ord.comprador_whatsapp,
         comprador: ord.comprador_nombre,
         numeros: numeros.map((n) => String(n).padStart(4, '0')),
-        vendedor: vend ? `${vend.nombre} (${vend.categoria})` : null,
-        chances: chancesDe(ord.cantidad),
+        entradas: ord.entradas,
       })]);
-    return { resultado: 'asignado', numeros, chances: chancesDe(ord.cantidad) };
+    return { resultado: 'asignado', numeros };
   });
 }
 
@@ -330,59 +316,36 @@ export async function estadoOrden(pool, ref) {
   if (o.estado === 'pagada') {
     const n = await pool.query(`select numero from numeros where orden_id = $1 and estado = 'vendido' order by numero`, [o.id]);
     out.numeros = n.rows.map((r) => String(r.numero).padStart(4, '0'));
-    out.chances = chancesDe(o.cantidad);
+    out.entradas = o.entradas;
+    out.sueltos = o.cantidad - o.entradas;
   }
   return out;
 }
 
+// Cartones que quedan (públicos: la web muestra "Quedan X de 500"). Cuenta libres y reservas vencidas.
+export async function stock(pool) {
+  const r = await pool.query(`select count(*)::int as disponibles from numeros where ${DISPONIBLE}`);
+  return { total: TOTAL_NUMEROS, disponibles: r.rows[0].disponibles };
+}
+
 export async function panel(pool) {
   const q = (sql, args) => pool.query(sql, args).then((r) => r.rows);
-  const [tot] = await q(
-    `select count(*)::int as vendidos, (count(*) * $1)::int as recaudado from numeros where estado = 'vendido'`, [PRECIO]);
-  // Los datos viejos de pruebas (con código de jugador) se siguen mostrando gracias al join a jugadores.
-  const VEND = `coalesce(o.vendedor_nombre, j.nombre, 'Sin vendedor')`;
-  const CAT = `coalesce(o.vendedor_categoria, j.categoria, '—')`;
-  const DESDE = `from numeros n join ordenes o on o.id = n.orden_id
-     left join jugadores j on j.codigo = o.jugador_codigo where n.estado = 'vendido'`;
-  const porJugador = await q(
-    `select (array_agg(${VEND} order by length(regexp_replace(${VEND}, '[A-Za-z .''-]', '', 'g')) desc, o.creada_en desc))[1] as vendedor, ${CAT} as categoria, count(*)::int as numeros
-     ${DESDE}
-     group by coalesce(o.vendedor_clave, lower(j.nombre), ''), ${CAT} order by numeros desc, vendedor`);
-  const porCategoria = await q(
-    `select ${CAT} as categoria, count(*)::int as numeros ${DESDE} group by 1 order by numeros desc`);
-  const ultimas = await q(
-    `select lpad(n.numero::text, 4, '0') as numero, o.comprador_nombre as comprador,
-            ${VEND} as vendedor, ${CAT} as categoria
-     ${DESDE} order by o.creada_en desc, n.numero limit 30`);
-  // Compras pagadas (para avisarles sus números por WhatsApp) y canceladas (para devolver el dinero).
+  const [tot] = await q(`select count(*)::int as vendidos from numeros where estado = 'vendido'`);
+  const [ven] = await q(
+    `select count(*)::int as compras, coalesce(sum(monto), 0)::int as recaudado,
+            coalesce(sum(entradas), 0)::int as entradas, coalesce(sum(cantidad - entradas), 0)::int as sueltos
+     from ordenes where estado = 'pagada'`);
+  // Registro de compras: pagadas y canceladas (estas últimas para devolver el dinero).
   const compradores = await q(
     `select o.ref, o.comprador_nombre as comprador, o.comprador_whatsapp as whatsapp, o.estado, o.monto,
-            case when o.estado = 'cancelada'
-                 then coalesce((select array_agg(lpad(x::text, 4, '0') order by x) from unnest(o.numeros_anulados) x), '{}')
-                 else coalesce((select array_agg(lpad(n.numero::text, 4, '0') order by n.numero)
-                                from numeros n where n.orden_id = o.id and n.estado = 'vendido'), '{}') end as numeros,
-            ${VEND} as vendedor, ${CAT} as categoria,
-            coalesce(o.pagada_en, o.creada_en) as pagada_en, o.avisado_en, o.wsp_tocado_en, o.cancelada_en,
+            o.entradas, (o.cantidad - o.entradas)::int as sueltos, o.cantidad,
+            coalesce(o.pagada_en, o.creada_en) as pagada_en, o.cancelada_en,
             (select p.mp_payment_id from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_id,
-            (select p.estado_mp from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_estado,
-            o.cantidad
-     from ordenes o left join jugadores j on j.codigo = o.jugador_codigo
+            (select p.estado_mp from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_estado
+     from ordenes o
      where o.estado in ('pagada', 'cancelada')
      order by coalesce(o.cancelada_en, o.pagada_en, o.creada_en) desc`);
-  const sinAvisar = compradores.filter((c) => c.estado === 'pagada' && !c.avisado_en).length;
-  for (const c of compradores) c.chances = c.estado === 'pagada' ? chancesDe(c.cantidad) : 0;
-  const ganadores = await q(
-    `select s.id, s.premio, s.chance, s.sorteado_en, s.anulado_en, o.ref, o.comprador_nombre as comprador,
-            o.comprador_whatsapp as whatsapp
-     from sorteo_extra s join ordenes o on o.id = s.orden_id order by s.id`);
-  const vivos = compradores.filter((c) => c.chances > 0);
-  const sorteoExtra = {
-    cada: SORTEO_CADA,
-    participantes: vivos.length,
-    chances: vivos.reduce((t, c) => t + c.chances, 0),
-    ganadores,
-  };
-  return { ...tot, disponibles: TOTAL_NUMEROS - tot.vendidos, porJugador, porCategoria, ultimas, sinAvisar, compradores, sorteoExtra };
+  return { vendidos: tot.vendidos, disponibles: TOTAL_NUMEROS - tot.vendidos, total: TOTAL_NUMEROS, ...ven, compradores };
 }
 
 /**
@@ -403,7 +366,6 @@ export async function cancelarCompra(pool, ref) {
       `update numeros set estado = 'libre', orden_id = null, reservado_hasta = null where orden_id = $1`, [o.id]);
     await c.query(
       `update ordenes set estado = 'cancelada', cancelada_en = now(), numeros_anulados = $2 where id = $1`, [o.id, nums]);
-    await c.query(`update sorteo_extra set anulado_en = now() where orden_id = $1 and anulado_en is null`, [o.id]);
     return { ref: o.ref, estado: 'cancelada', numeros: nums.map((n) => String(n).padStart(4, '0')), devolver };
   });
 }
@@ -416,63 +378,10 @@ export async function eliminarCompra(pool, ref) {
     if (o.estado !== 'cancelada') {
       throw new ErrorNegocio('primero_cancelar', 'Primero hay que cancelar la compra; después se puede eliminar.');
     }
-    await c.query('delete from sorteo_extra where orden_id = $1', [o.id]);
-    await c.query('delete from cupones where orden_id = $1', [o.id]);
     await c.query('delete from notificaciones where orden_id = $1', [o.id]);
     await c.query('delete from pagos where orden_id = $1', [o.id]);
     await c.query('delete from ordenes where id = $1', [o.id]);
     return { ref: o.ref, eliminada: true };
-  });
-}
-
-/** Un organizador marca (o desmarca) que ya avisó a este comprador. Solo órdenes pagadas. */
-export async function marcarAvisado(pool, ref, avisado = true) {
-  const r = await pool.query(
-    `update ordenes set avisado_en = case when $2 then now() else null end
-     where ref = $1 and estado = 'pagada' returning avisado_en`, [String(ref ?? ''), !!avisado]);
-  if (!r.rowCount) throw new ErrorNegocio('orden_inexistente', 'No encontramos esa compra.');
-  return { ref, avisado_en: r.rows[0].avisado_en };
-}
-
-/** El comprador tocó su propio botón de WhatsApp. Solo deja constancia: no cuenta como aviso. */
-export async function marcarWspTocado(pool, ref) {
-  await pool.query(
-    `update ordenes set wsp_tocado_en = coalesce(wsp_tocado_en, now())
-     where ref = $1 and estado = 'pagada'`, [String(ref ?? '')]);
-}
-
-// ---------------------------------------------------------------------------
-// Sorteo extra de premios de sponsors
-// ---------------------------------------------------------------------------
-
-/**
- * Sortea un premio entre las chances de las compras pagadas (una chance cada SORTEO_CADA números).
- * Una misma compra gana una sola vez. El azar es el del sistema (crypto), sin intervención de nadie.
- */
-export async function sortearExtra(pool, { premio }) {
-  const nombre = String(premio ?? '').trim().slice(0, 120);
-  if (!nombre) throw new ErrorNegocio('premio_vacio', 'Escribí qué premio se sortea.');
-  return tx(pool, async (c) => {
-    await c.query(`select pg_advisory_xact_lock(hashtext('sorteo_extra'))`);
-    const filas = (await c.query(
-      `select o.id, o.ref, o.comprador_nombre, o.comprador_whatsapp, o.cantidad from ordenes o
-       where o.estado = 'pagada' and o.cantidad >= $1
-         and not exists (select 1 from sorteo_extra s where s.orden_id = o.id and s.anulado_en is null)
-       order by o.ref`, [SORTEO_CADA])).rows;
-    const total = filas.reduce((t, o) => t + chancesDe(o.cantidad), 0);
-    if (!total) throw new ErrorNegocio('sin_participantes', 'No hay compras participando (o todas ya ganaron un premio).');
-    let k = randomInt(total);
-    let ganador = filas[0];
-    for (const o of filas) {
-      const n = chancesDe(o.cantidad);
-      if (k < n) { ganador = o; break; }
-      k -= n;
-    }
-    const r = (await c.query(
-      `insert into sorteo_extra (premio, orden_id, chance) values ($1, $2, $3) returning id, sorteado_en`,
-      [nombre, ganador.id, k + 1])).rows[0];
-    return { id: r.id, premio: nombre, ref: ganador.ref, comprador: ganador.comprador_nombre,
-      whatsapp: ganador.comprador_whatsapp, participantes: filas.length, chances: total };
   });
 }
 

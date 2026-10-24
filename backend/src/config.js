@@ -8,7 +8,7 @@ import { crearMpReal, esTokenDePrueba, normalizarToken } from './mp-real.js';
  *   simulado   (por defecto)  sin conexión a Mercado Pago, checkout falso
  *   prueba                    Mercado Pago real con credenciales TEST-… (no mueve plata)
  *   produccion                cobros reales; exige HTTPS, clave de panel, secreto de webhook
- *                             y el número de autorización de la rifa
+ *                             y el número de autorización del evento
  */
 export function elegirMp(env = process.env) {
   const modo = env.MP_MODO || 'simulado';

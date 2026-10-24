@@ -67,7 +67,7 @@ export function crearMpReal({
         notification_url: `${baseUrl}/api/mp-webhook`,
         back_urls: { success: vuelta(), pending: vuelta(), failure: vuelta('&pago=rechazado') },
         auto_return: 'approved',
-        statement_descriptor: 'RIFA LOMAS',
+        statement_descriptor: 'BINGO BALMORAL',
       };
       if (expiraEn) {
         cuerpo.expires = true;
