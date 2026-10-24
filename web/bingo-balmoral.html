@@ -110,6 +110,12 @@ footer .priv { margin-left: auto; font-size: 13px; }
 .hecho h1.mal { color: var(--bordo); }
 .hecho .linea { margin-top: 12px; font-size: 19px; color: var(--suave); }
 .resumen { margin: 22px auto 0; max-width: 460px; background: var(--papel); border: 2px solid var(--oro); border-radius: 16px; padding: 16px; font-weight: 600; font-size: 18px; }
+.aviso-entrada { margin: 18px auto 0; max-width: 460px; background: var(--oro-claro); border: 2px dashed var(--oro); border-radius: 16px; padding: 18px 16px; display: grid; gap: 8px; text-align: center; }
+.aviso-entrada b { font-family: var(--titulo); font-weight: 400; font-size: 21px; line-height: 1.2; color: var(--verde-osc); }
+.aviso-entrada span { font-size: 17px; font-weight: 600; }
+.aviso-entrada em { font-style: normal; font-size: 15px; color: var(--suave); }
+.aviso-entrada em strong { color: var(--texto); font-size: 18px; }
+.aviso-entrada small { font-size: 14px; color: var(--suave); }
 .acciones-col { max-width: 460px; margin: 22px auto 0; display: grid; gap: 12px; }
 
 /* Panel */
@@ -235,8 +241,13 @@ footer .priv { margin-left: auto; font-size: 13px; }
     <h1 id="h-titulo">Confirmando tu pago…</h1>
     <p class="linea" id="h-linea">Un momento, estamos verificando.</p>
     <div class="resumen" id="h-resumen" hidden></div>
+    <div class="aviso-entrada" id="h-aviso" hidden>
+      <b>Para entrar al evento, presentá tu nombre y apellido.</b>
+      <span id="h-aviso-det"></span>
+      <em id="h-aviso-nombre"></em>
+      <small id="h-aviso-lugar"></small>
+    </div>
     <div class="acciones-col">
-      <p class="nota" id="h-nota" hidden></p>
       <a class="btn" href="/" id="h-volver">Volver al inicio</a>
     </div>
   </div>
@@ -402,7 +413,7 @@ footer .priv { margin-left: auto; font-size: 13px; }
     intento = intento || 0;
     var t = $('h-titulo'), l = $('h-linea');
     function estado(titulo, texto, ok) { t.textContent = titulo; t.className = ok === false ? 'mal' : ''; l.textContent = texto; }
-    if (!intento) { $('h-resumen').hidden = true; $('h-nota').hidden = true; estado('Confirmando tu pago…', 'Un momento, estamos verificando.'); }
+    if (!intento) { $('h-resumen').hidden = true; $('h-aviso').hidden = true; estado('Confirmando tu pago…', 'Un momento, estamos verificando.'); }
     api('GET', '/api/orden/' + encodeURIComponent(ref)).then(function (r) {
       if (!r.ok) { estado('No encontramos la compra', 'Revisá el link o escribinos.', false); return; }
       var o = r.body;
@@ -413,8 +424,16 @@ footer .priv { margin-left: auto; font-size: 13px; }
         if (o.sueltos) partes.push(plural(o.sueltos, 'cartón suelto', 'cartones sueltos'));
         $('h-resumen').textContent = partes.join(' + ') + ' · ' + money(o.monto);
         $('h-resumen').hidden = false;
-        $('h-nota').textContent = EV.cuando ? 'Te esperamos el ' + EV.cuando + (EV.donde ? ' en ' + EV.donde : '') + '.' : '';
-        $('h-nota').hidden = !EV.cuando;
+        $('h-aviso-det').textContent = o.entradas
+          ? 'Ahí te entregarán tus cartones y tus entradas.'
+          : 'Ahí te entregarán tus cartones.';
+        $('h-aviso-nombre').textContent = '';
+        if (o.comprador) {
+          $('h-aviso-nombre').appendChild(document.createTextNode('Tu compra está a nombre de '));
+          var fuerte = document.createElement('strong'); fuerte.textContent = o.comprador; $('h-aviso-nombre').appendChild(fuerte);
+        }
+        $('h-aviso-lugar').textContent = EV.cuando ? 'Te esperamos el ' + EV.cuando + (EV.donde ? ' en ' + EV.donde : '') + '.' : '';
+        $('h-aviso').hidden = false;
         return;
       }
       if (o.estado === 'cancelada') { estado('Esta compra fue cancelada', 'Los organizadores cancelaron esta compra. Si ya pagaste, te devolvemos el dinero. Escribinos.', false); return; }
