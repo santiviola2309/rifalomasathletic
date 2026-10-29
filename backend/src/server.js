@@ -8,8 +8,8 @@ import { aplicarEsquema, makePool } from './db.js';
 import { elegirMp, exigirCuentaDePrueba } from './config.js';
 import { firmar, verificarFirma } from './mp.js';
 import {
-  ErrorNegocio, cancelarCompra, cancelarOrden, conciliacion, crearOrden, eliminarCompra, estadoOrden,
-  guardarPreferencia, liberarVencidas, panel, stock, procesarPago,
+  ErrorNegocio, ajustarCompra, cancelarCompra, cancelarOrden, conciliacion, crearCortesia, crearOrden, eliminarCompra, estadoOrden,
+  guardarPreferencia, liberarVencidas, panel, stock, procesarPago, transferirCompra,
 } from './orders.js';
 
 // La web es un solo HTML. Al servirla desde acá se le avisa que hay servidor (modo API).
@@ -152,6 +152,18 @@ export function crearApp({ pool, mp, config = {} }) {
         if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
         const b = await leerJson(req);
         return json(res, 200, url.pathname === '/api/panel/cancelar' ? await cancelarCompra(pool, b.ref) : await eliminarCompra(pool, b.ref));
+      }
+      if (req.method === 'POST' && (url.pathname === '/api/panel/ajustar' || url.pathname === '/api/panel/cortesia')) {
+        if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
+        const b = await leerJson(req);
+        return json(res, 200, url.pathname === '/api/panel/ajustar'
+          ? await ajustarCompra(pool, { ref: b.ref, entradas: b.entradas, sueltos: b.sueltos })
+          : await crearCortesia(pool, { nombre: b.nombre, whatsapp: b.whatsapp, entradas: b.entradas, sueltos: b.sueltos }));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/panel/transferir') {
+        if (!panelKey || !iguales(req.headers['x-panel-key'], panelKey)) return json(res, 401, { error: 'no_autorizado' });
+        const b = await leerJson(req);
+        return json(res, 200, await transferirCompra(pool, { desde: b.desde, hacia: b.hacia, entradas: b.entradas, sueltos: b.sueltos }));
       }
       if (req.method === 'GET' && url.pathname.startsWith('/api/orden/')) {
         const o = await estadoOrden(pool, url.pathname.split('/')[3]);
