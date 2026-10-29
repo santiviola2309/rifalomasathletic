@@ -25,6 +25,24 @@ create table if not exists ordenes (
 -- Entradas anticipadas de la compra (cada una incluye 1 cartón). cantidad = entradas + cartones sueltos.
 alter table ordenes add column if not exists entradas int not null default 0 check (entradas >= 0);
 
+-- Cortesías (invitaciones sin pago) y ajustes de cantidades hechos a mano desde el panel.
+--   cortesia       : compra regalada, sin pago de Mercado Pago (monto 0)
+--   monto_original : lo que se cobró antes del primer ajuste (para saber cuánto devolver o cobrar)
+--   ajustada_en    : cuándo se ajustaron las cantidades por última vez
+alter table ordenes add column if not exists cortesia boolean not null default false;
+alter table ordenes add column if not exists monto_original int;
+alter table ordenes add column if not exists ajustada_en timestamptz;
+do $$
+begin
+  -- El monto tiene que ser positivo, salvo en las cortesías (que no se cobran).
+  if exists (select 1 from pg_constraint where conrelid = 'ordenes'::regclass and conname = 'ordenes_monto_check') then
+    alter table ordenes drop constraint ordenes_monto_check;
+  end if;
+  if not exists (select 1 from pg_constraint where conrelid = 'ordenes'::regclass and conname = 'ordenes_monto_valido') then
+    alter table ordenes add constraint ordenes_monto_valido check (monto > 0 or cortesia);
+  end if;
+end $$;
+
 -- pagada_en: cuándo se acreditó el pago (para ordenar el registro de compras del panel)
 alter table ordenes add column if not exists pagada_en timestamptz;
 
