@@ -340,6 +340,7 @@ export async function panel(pool) {
   const compradores = await q(
     `select o.ref, o.comprador_nombre as comprador, o.comprador_whatsapp as whatsapp, o.estado, o.monto,
             o.entradas, (o.cantidad - o.entradas)::int as sueltos, o.cantidad,
+            o.cortesia, o.monto_original, o.ajustada_en,
             coalesce(o.pagada_en, o.creada_en) as pagada_en, o.cancelada_en,
             (select p.mp_payment_id from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_id,
             (select p.estado_mp from pagos p where p.orden_id = o.id and p.resultado = 'asignado' limit 1) as pago_estado
@@ -386,6 +387,110 @@ export async function eliminarCompra(pool, ref) {
   });
 }
 
+const TEL_MAX = 30;
+
+function validarCantidades(entradas, sueltos) {
+  if (!Number.isInteger(entradas) || !Number.isInteger(sueltos) || entradas < 0 || sueltos < 0) {
+    throw new ErrorNegocio('cantidad_invalida', 'Revisá la cantidad de entradas y de cartones.');
+  }
+  if (entradas + sueltos < 1 || entradas + sueltos > MAX_POR_ORDEN) {
+    throw new ErrorNegocio('cantidad_invalida', `Tiene que haber entre 1 y ${MAX_POR_ORDEN} cartones en total.`);
+  }
+}
+
+/**
+ * Corrige a mano las cantidades de una compra ya pagada (o de una cortesía): suma o saca entradas y cartones
+ * sueltos. Los cartones que sobran vuelven al stock y los que faltan se toman al azar. El sistema no mueve plata:
+ * devuelve `diferencia` (negativa = hay que devolver a la persona en Mercado Pago, positiva = falta cobrar).
+ */
+export async function ajustarCompra(pool, { ref, entradas, sueltos }) {
+  validarCantidades(entradas, sueltos);
+  return tx(pool, async (c) => {
+    const o = (await c.query('select * from ordenes where ref = $1 for update', [String(ref ?? '')])).rows[0];
+    if (!o) throw new ErrorNegocio('orden_inexistente', 'No encontramos esa compra.');
+    if (o.estado !== 'pagada') throw new ErrorNegocio('no_ajustable', 'Solo se pueden ajustar compras pagadas.');
+    const antes = o.cantidad, despues = entradas + sueltos;
+    if (despues < antes) {
+      const sobran = (await c.query(
+        `select numero from numeros where orden_id = $1 and estado = 'vendido' order by numero desc limit $2`,
+        [o.id, antes - despues])).rows.map((r) => r.numero);
+      await c.query(
+        `update numeros set estado = 'libre', orden_id = null, reservado_hasta = null where numero = any($1::smallint[])`, [sobran]);
+    } else if (despues > antes) {
+      const nuevos = await tomarAzar(c, despues - antes);
+      if (nuevos.length !== despues - antes) throw new ErrorNegocio('sin_stock', 'No quedan cartones disponibles para sumar.');
+      await c.query(
+        `update numeros set estado = 'vendido', orden_id = $1, reservado_hasta = null where numero = any($2::smallint[])`, [o.id, nuevos]);
+    }
+    const pagado = o.cortesia ? 0 : (o.monto_original ?? o.monto);
+    const monto = o.cortesia ? 0 : montoDe(entradas, sueltos);
+    await c.query(
+      `update ordenes set entradas = $2, cantidad = $3, monto = $4, monto_original = $5, ajustada_en = now() where id = $1`,
+      [o.id, entradas, despues, monto, o.cortesia ? null : pagado]);
+    return { ref: o.ref, entradas, sueltos, cantidad: despues, monto, pagado, diferencia: monto - pagado, cortesia: o.cortesia };
+  });
+}
+
+/**
+ * Pasa entradas y cartones sueltos de una compra a otra (por ejemplo, alguien le cede lugares a otra persona).
+ * Los cartones cambian de dueño, no se vuelven a sortear. Si las dos compras son pagas, la plata se mueve con
+ * ellos, así que ninguna de las dos queda con "devolver" ni "falta cobrar" (y la recaudación total no cambia).
+ * Si una es cortesía, no se mueve plata.
+ */
+export async function transferirCompra(pool, { desde, hacia, entradas, sueltos }) {
+  if (!Number.isInteger(entradas) || !Number.isInteger(sueltos) || entradas < 0 || sueltos < 0 || entradas + sueltos < 1) {
+    throw new ErrorNegocio('cantidad_invalida', 'Indicá cuántas entradas y cuántos cartones sueltos pasar.');
+  }
+  const refA = String(desde ?? ''), refB = String(hacia ?? '');
+  if (!refA || !refB || refA === refB) throw new ErrorNegocio('compras_invalidas', 'Elegí dos compras distintas.');
+  const k = entradas + sueltos;
+  return tx(pool, async (c) => {
+    const filas = (await c.query('select * from ordenes where ref = any($1) order by ref for update', [[refA, refB]])).rows;
+    const A = filas.find((o) => o.ref === refA), B = filas.find((o) => o.ref === refB);
+    if (!A || !B) throw new ErrorNegocio('orden_inexistente', 'No encontramos una de las compras.');
+    if (A.estado !== 'pagada' || B.estado !== 'pagada') throw new ErrorNegocio('no_ajustable', 'Las dos compras tienen que estar pagadas.');
+    if (A.entradas < entradas || (A.cantidad - A.entradas) < sueltos) {
+      throw new ErrorNegocio('cantidad_invalida', 'La compra de origen no tiene tantas entradas o cartones sueltos.');
+    }
+    if (A.cantidad - k < 1) throw new ErrorNegocio('queda_vacia', 'La compra de origen se quedaría sin cartones: cancelala en lugar de pasarlos.');
+    if (B.cantidad + k > MAX_POR_ORDEN) throw new ErrorNegocio('cantidad_invalida', `La compra de destino superaría los ${MAX_POR_ORDEN} cartones.`);
+    const mover = (await c.query(
+      `select numero from numeros where orden_id = $1 and estado = 'vendido' order by numero desc limit $2`, [A.id, k])).rows.map((r) => r.numero);
+    await c.query(`update numeros set orden_id = $1 where numero = any($2::smallint[])`, [B.id, mover]);
+    const mueveMonto = !A.cortesia && !B.cortesia;
+    const v = mueveMonto ? montoDe(entradas, sueltos) : 0;
+    const pagadoA = A.monto_original ?? A.monto, pagadoB = B.monto_original ?? B.monto;
+    await c.query(
+      `update ordenes set entradas = $2, cantidad = $3, monto = $4, monto_original = $5, ajustada_en = now() where id = $1`,
+      [A.id, A.entradas - entradas, A.cantidad - k, A.monto - v, mueveMonto ? pagadoA - v : A.monto_original]);
+    await c.query(
+      `update ordenes set entradas = $2, cantidad = $3, monto = $4, monto_original = $5, ajustada_en = now() where id = $1`,
+      [B.id, B.entradas + entradas, B.cantidad + k, B.monto + v, mueveMonto ? pagadoB + v : B.monto_original]);
+    return { desde: A.ref, hacia: B.ref, de: A.comprador_nombre, a: B.comprador_nombre, entradas, sueltos, cartones: k, montoMovido: v };
+  });
+}
+
+/** Regala entradas y cartones (invitación sin pago): queda en el registro como "cortesía" y no suma plata. */
+export async function crearCortesia(pool, { nombre, whatsapp, entradas, sueltos }) {
+  validarCantidades(entradas, sueltos);
+  if (!nombreCompletoValido(nombre)) throw new ErrorNegocio('nombre_invalido', 'Escribí nombre y apellido.');
+  const tel = String(whatsapp ?? '').trim().slice(0, TEL_MAX) || 'sin teléfono';
+  const cantidad = entradas + sueltos;
+  return tx(pool, async (c) => {
+    const id = randomUUID(), ref = nuevaRef();
+    const numeros = await tomarAzar(c, cantidad);
+    if (numeros.length !== cantidad) throw new ErrorNegocio('sin_stock', 'No quedan cartones disponibles.');
+    await c.query(
+      `insert into ordenes (id, ref, comprador_nombre, comprador_whatsapp, cantidad, entradas, modo, monto, estado,
+                            cortesia, expira_en, pagada_en)
+       values ($1, $2, $3, $4, $5, $6, 'azar', 0, 'pagada', true, now(), now())`,
+      [id, ref, formatearNombre(nombre), tel, cantidad, entradas]);
+    await c.query(
+      `update numeros set estado = 'vendido', orden_id = $1, reservado_hasta = null where numero = any($2::smallint[])`, [id, numeros]);
+    return { ref, comprador: formatearNombre(nombre), entradas, sueltos, cantidad };
+  });
+}
+
 // Cruza órdenes, pagos y números. Todo en `problemas` debe ser cero.
 export async function conciliacion(pool) {
   const q = (sql) => pool.query(sql).then((r) => r.rows);
@@ -396,7 +501,7 @@ export async function conciliacion(pool) {
      where resultado in ('requiere_reembolso','sin_orden','monto_distinto')
         or (resultado = 'asignado' and estado_mp <> 'approved')`);
   const pagadasSinPago = await q(
-    `select o.ref from ordenes o where o.estado = 'pagada'
+    `select o.ref from ordenes o where o.estado = 'pagada' and not o.cortesia
        and not exists (select 1 from pagos p where p.orden_id = o.id and p.resultado = 'asignado')`);
   const vendidosSinOrden = await q(
     `select n.numero from numeros n left join ordenes o on o.id = n.orden_id
